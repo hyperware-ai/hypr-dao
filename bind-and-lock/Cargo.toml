@@ -15,7 +15,8 @@ rev = "aaf7e02"
 
 [dependencies.hyperware_process_lib]
 features = ["hyperapp"]
-path = "/Users/johnathanreale/RustroverProjects/process_lib"
+git = "https://github.com/hyperware-ai/process_lib.git"
+rev = "77e5014ddd0baf53f69c0a7f21b1100f9d20e2c8"
 
 [dependencies.serde]
 features = ["derive"]
