@@ -1,0 +1,51 @@
+interface app {
+use standard.{address};
+
+    record lock-status-payload {
+        node-id: string,
+        owner-address: option<string>,
+        lock-details: option<lock-details-view>,
+        hypr-owned: option<balance-view>,
+        hypr-approved: option<balance-view>,
+        tokeregistry-allowance: option<balance-view>,
+        hypr-token-address: option<string>,
+        available-to-bind: option<balance-view>,
+        bindings: list<bind-details-view>,
+        error: option<string>
+    }
+
+    record balance-view {
+        amount-raw-wei: string,
+        amount-formatted-hypr: string
+    }
+
+    record bind-details-view {
+        namehash: string,
+        name: option<string>,
+        amount-raw-wei: string,
+        amount-formatted-hypr: string,
+        unlock-timestamp: u64,
+        remaining-seconds: u64
+    }
+
+    record lock-details-view {
+        amount-raw-wei: string,
+        amount-formatted-hypr: string,
+        unlock-timestamp: u64,
+        remaining-seconds: u64
+    }
+
+    // Function signature for: get-lock-status (http)
+    // HTTP: POST /api/get-lock-status
+    record get-lock-status-signature-http {
+        target: string,
+        returning: result<lock-status-payload, string>
+    }
+
+    // Function signature for: refresh-lock-status (http)
+    // HTTP: POST /api/refresh-lock-status
+    record refresh-lock-status-signature-http {
+        target: string,
+        returning: result<lock-status-payload, string>
+    }
+}

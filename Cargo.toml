@@ -1,0 +1,11 @@
+[profile.release]
+lto = true
+opt-level = "s"
+panic = "abort"
+
+[workspace]
+members = [
+    "bind-and-lock",
+    "target/bind-and-lock-caller-util?",
+]
+resolver = "2"

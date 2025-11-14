@@ -1,0 +1,23 @@
+[
+  {
+    "process_name": "bind-and-lock",
+    "process_wasm_path": "/bind-and-lock.wasm",
+    "on_exit": "Restart",
+    "request_networking": false,
+    "request_capabilities": [
+      "homepage:homepage:sys",
+      "eth:distro:sys",
+      "http-server:distro:sys",
+      "hns-indexer:hns-indexer:sys",
+      "vfs:distro:sys"
+    ],
+    "grant_capabilities": [
+      "homepage:homepage:sys",
+      "eth:distro:sys",
+      "http-server:distro:sys",
+      "hns-indexer:hns-indexer:sys",
+      "vfs:distro:sys"
+    ],
+    "public": false
+  }
+]
