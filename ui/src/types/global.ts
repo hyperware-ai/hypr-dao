@@ -6,7 +6,7 @@ declare global {
   interface Window {
     our?: {
       node: string;      // e.g., "alice.os"
-      process: string;   // e.g., "bind_and_lock:bind_and_lock:template.os"
+      process: string;   // e.g., "lock_and_bind:lock_and_bind:template.os"
     };
   }
 }

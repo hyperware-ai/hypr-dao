@@ -2,16 +2,41 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useWaitForTransactionReceipt, useWriteContract } from 'wagmi';
 import { base, anvil } from 'wagmi/chains';
-import {
-  BaseError,
-  ContractFunctionRevertedError,
-  concatHex,
-  keccak256,
-  parseEther,
-  stringToBytes,
-} from 'viem';
+import { concatHex, keccak256, parseEther, stringToBytes } from 'viem';
 import './App.css';
-import { useBindAndLockStore } from './store/bind_and_lock';
+import { useBindAndLockStore } from './store/lock_and_bind';
+import type { BalanceView, BindingView, LockDetailsView } from './types/lock_and_bind';
+
+type StepId = 'approve' | 'lock' | 'bind';
+type StepIcon = 'check' | 'lock' | 'chain';
+
+interface StepConfig {
+  id: StepId;
+  title: string;
+  description: string;
+  icon: StepIcon;
+}
+
+const steps: StepConfig[] = [
+  {
+    id: 'approve',
+    title: 'Approve',
+    description: 'Allow the TokenRegistry to spend HYPR from your wallet when locking funds.',
+    icon: 'check',
+  },
+  {
+    id: 'lock',
+    title: 'Lock',
+    description: 'Manage lock duration and amount once your connections are ready.',
+    icon: 'lock',
+  },
+  {
+    id: 'bind',
+    title: 'Bind',
+    description: 'Manage name bindings and distribute HYPR across registrations.',
+    icon: 'chain',
+  },
+];
 
 const TOKEN_REGISTRY_ADDRESSES: Record<number, `0x${string}`> = {
   [base.id]: '0x0000000000e8d224B902632757d5dbc51a451456',
@@ -29,15 +54,9 @@ const tokenRegistryAbi = [
     ],
     outputs: [],
   },
-  {
-    type: 'error',
-    name: 'InvalidDuration',
-    inputs: [
-      { name: 'duration', type: 'uint256' },
-      { name: 'minDuration', type: 'uint256' },
-      { name: 'maxDuration', type: 'uint256' },
-    ],
-  },
+] as const;
+
+const transferRegistrationAbi = [
   {
     type: 'function',
     name: 'transferRegistration',
@@ -70,17 +89,7 @@ const MAX_LOCK_DURATION_SECONDS = 4 * 52 * 7 * 24 * 60 * 60; // ~4 years
 const ZERO_NAMEHASH = '0x0000000000000000000000000000000000000000000000000000000000000000' as const;
 
 function App() {
-  const [amountInput, setAmountInput] = useState('');
-  const [durationInput, setDurationInput] = useState('');
-  const [manageError, setManageError] = useState<string | null>(null);
-  const [srcNameInput, setSrcNameInput] = useState('');
-  const [dstNameInput, setDstNameInput] = useState('');
-  const [transferAmountInput, setTransferAmountInput] = useState('');
-  const [transferDurationInput, setTransferDurationInput] = useState('');
-  const [transferError, setTransferError] = useState<string | null>(null);
-  const [allowanceInput, setAllowanceInput] = useState('');
-  const [allowanceError, setAllowanceError] = useState<string | null>(null);
-
+  const [activeStep, setActiveStep] = useState<StepId>('approve');
   const {
     nodeId,
     isConnected,
@@ -89,9 +98,9 @@ function App() {
     hyprOwned,
     hyprApproved,
     tokeregistryAllowance,
-    hyprTokenAddress,
     availableToBind,
     bindings,
+    hyprTokenAddress,
     lastError,
     isLoading,
     error,
@@ -106,113 +115,395 @@ function App() {
     if (chain?.id && TOKEN_REGISTRY_ADDRESSES[chain.id]) {
       return TOKEN_REGISTRY_ADDRESSES[chain.id];
     }
-    // default to base mainnet address
     return TOKEN_REGISTRY_ADDRESSES[base.id];
   }, [chain?.id]);
-
-  const {
-    data: txHash,
-    error: writeError,
-    isPending: isWritePending,
-    writeContract,
-  } = useWriteContract();
-  const {
-    data: transferTxHash,
-    error: transferWriteError,
-    isPending: isTransferPending,
-    writeContract: writeTransferContract,
-  } = useWriteContract();
-  const {
-    data: approveTxHash,
-    error: approveWriteError,
-    isPending: isApprovePending,
-    writeContract: writeApproveContract,
-  } = useWriteContract();
-
-  const {
-    isLoading: isConfirming,
-    isSuccess: isConfirmed,
-  } = useWaitForTransactionReceipt({
-    hash: txHash,
-  });
 
   useEffect(() => {
     initialize();
   }, [initialize]);
 
+  const connectComplete = Boolean(isConnected && nodeId && isWalletConnected);
+  const hasAllowance = Boolean(
+    tokeregistryAllowance && tokeregistryAllowance.amount_raw_wei !== '0'
+  );
+  const hasLockedAmount = Boolean(lockDetails && lockDetails.amount_raw_wei !== '0');
+  const lockTabEnabled = connectComplete && (hasAllowance || hasLockedAmount);
+  const bindTabEnabled =
+    lockTabEnabled &&
+    ((availableToBind && availableToBind.amount_raw_wei !== '0') || bindings.length > 0);
+
   useEffect(() => {
-    if (!isConnected) return;
-
-    const interval = setInterval(() => {
-      fetchLockStatus();
-    }, 30_000);
-
-    return () => clearInterval(interval);
-  }, [isConnected, fetchLockStatus]);
-
-  useEffect(() => {
-    if (writeError) {
-      setManageError(writeError.message ?? 'Failed to start transaction.');
+    if (!lockTabEnabled && (activeStep === 'lock' || activeStep === 'bind')) {
+      setActiveStep('approve');
+    } else if (lockTabEnabled && !bindTabEnabled && activeStep === 'bind') {
+      setActiveStep('lock');
     }
-  }, [writeError]);
+  }, [lockTabEnabled, bindTabEnabled, activeStep]);
 
   useEffect(() => {
-    if (transferWriteError) {
-      setTransferError(transferWriteError.message ?? 'Failed to start transaction.');
+    if (connectComplete) {
+      void fetchLockStatus();
     }
-  }, [transferWriteError]);
+  }, [connectComplete, fetchLockStatus]);
 
-  useEffect(() => {
-    if (approveWriteError) {
-      setAllowanceError(approveWriteError.message ?? 'Failed to start transaction.');
+  const canAccessStep = (id: StepId) => {
+    if (id === 'approve') {
+      return connectComplete;
     }
-  }, [approveWriteError]);
+    if (id === 'lock') {
+      return lockTabEnabled;
+    }
+    if (id === 'bind') {
+      return bindTabEnabled;
+    }
+    return false;
+  };
+
+  const handleSelectStep = (id: StepId) => {
+    if (canAccessStep(id)) {
+      setActiveStep(id);
+    }
+  };
+
+  const stepDescription = useMemo(() => {
+    return steps.find((step) => step.id === activeStep)?.description ?? '';
+  }, [activeStep]);
+  const activeStepTitle = useMemo(() => steps.find((step) => step.id === activeStep)?.title ?? '', [activeStep]);
+
+  const showContent = connectComplete;
+
+  return (
+    <div className="app">
+      <div className="phone-shell">
+        <div className="phone-frame">
+          <TopStatusBar
+            hyperConnected={isConnected}
+            walletConnected={isWalletConnected}
+            walletAddress={address}
+          />
+
+          <div className="phone-body">
+            <header className="app-header">
+              <h1 className="app-title">🔐 Lock &amp; Bind</h1>
+              <p className="app-subtitle">HYPR registry companion</p>
+            </header>
+
+            {showContent && (
+              <>
+                {error && (
+                  <div className="error-banner">
+                    <span>{error}</span>
+                    <button onClick={clearError}>Dismiss</button>
+                  </div>
+                )}
+
+                <div className="step-info">
+                  <h2 className="step-heading">{activeStepTitle}</h2>
+                  <p className="step-description">{stepDescription}</p>
+                </div>
+
+                <main className="step-content">
+                  {activeStep === 'approve' && (
+                    <ApproveStep
+                      connectComplete={connectComplete}
+                      hyprOwned={hyprOwned}
+                      tokeregistryAllowance={tokeregistryAllowance}
+                      hyprTokenAddress={hyprTokenAddress}
+                      walletConnected={isWalletConnected}
+                      walletAddress={address}
+                      targetRegistryAddress={targetRegistryAddress}
+                      refreshLockStatus={refreshLockStatus}
+                    />
+                  )}
+
+                  {activeStep === 'lock' && (
+                    <LockStep
+                      connectComplete={connectComplete}
+                      nodeId={nodeId}
+                      ownerAddress={ownerAddress}
+                      lockDetails={lockDetails}
+                      hyprOwned={hyprOwned}
+                      hyprApproved={hyprApproved}
+                      tokeregistryAllowance={tokeregistryAllowance}
+                      availableToBind={availableToBind}
+                      lastError={lastError}
+                      isLoading={isLoading}
+                      refreshLockStatus={refreshLockStatus}
+                      walletConnected={isWalletConnected}
+                      walletAddress={address}
+                      targetRegistryAddress={targetRegistryAddress}
+                    />
+                  )}
+
+                  {activeStep === 'bind' && (
+                    <BindStep
+                      connectComplete={connectComplete}
+                      walletConnected={isWalletConnected}
+                      walletAddress={address}
+                      targetRegistryAddress={targetRegistryAddress}
+                      availableToBind={availableToBind}
+                      bindings={bindings}
+                      refreshLockStatus={refreshLockStatus}
+                    />
+                  )}
+                </main>
+              </>
+            )}
+          </div>
+
+          <BottomTabs
+            steps={steps}
+            activeStep={activeStep}
+            canAccessStep={canAccessStep}
+            onSelect={handleSelectStep}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface ApproveStepProps {
+  connectComplete: boolean;
+  hyprOwned: BalanceView | null;
+  tokeregistryAllowance: BalanceView | null;
+  hyprTokenAddress: string | null;
+  walletConnected: boolean;
+  walletAddress?: `0x${string}`;
+  targetRegistryAddress: `0x${string}`;
+  refreshLockStatus: () => Promise<void>;
+}
+
+const ApproveStep = ({
+  connectComplete,
+  hyprOwned,
+  tokeregistryAllowance,
+  hyprTokenAddress,
+  walletConnected,
+  walletAddress,
+  targetRegistryAddress,
+  refreshLockStatus,
+}: ApproveStepProps) => {
+  const [allowanceInput, setAllowanceInput] = useState('');
+  const [allowanceError, setAllowanceError] = useState<string | null>(null);
+
+  const {
+    data: allowanceTxHash,
+    error: allowanceWriteError,
+    isPending: isAllowancePending,
+    writeContract: writeApproveContract,
+  } = useWriteContract();
+
+  const {
+    isLoading: isAllowanceConfirming,
+    isSuccess: isAllowanceConfirmed,
+  } = useWaitForTransactionReceipt({
+    hash: allowanceTxHash,
+  });
 
   useEffect(() => {
-    if (isConfirmed) {
+    if (allowanceWriteError) {
+      setAllowanceError(getErrorMessage(allowanceWriteError));
+    }
+  }, [allowanceWriteError]);
+
+  useEffect(() => {
+    if (isAllowanceConfirmed) {
+      setAllowanceInput('');
+      void refreshLockStatus();
+    }
+  }, [isAllowanceConfirmed, refreshLockStatus]);
+
+  const handleSetAllowance = async (event: FormEvent) => {
+    event.preventDefault();
+    setAllowanceError(null);
+
+    if (!walletConnected || !walletAddress) {
+      setAllowanceError('Connect a wallet to set allowance.');
+      return;
+    }
+
+    if (!hyprTokenAddress) {
+      setAllowanceError('Unable to resolve HYPR token address.');
+      return;
+    }
+
+    if (allowanceInput === '') {
+      setAllowanceError('Enter an allowance amount (can be zero).');
+      return;
+    }
+
+    const allowanceValue = Number(allowanceInput);
+    if (Number.isNaN(allowanceValue) || allowanceValue < 0) {
+      setAllowanceError('Enter a non-negative allowance.');
+      return;
+    }
+
+    const amountWei = parseEther(allowanceInput || '0');
+    if (hyprOwned) {
+      const ownedWei = BigInt(hyprOwned.amount_raw_wei);
+      if (amountWei > ownedWei) {
+        setAllowanceError('Allowance cannot exceed wallet HYPR balance.');
+        return;
+      }
+    }
+
+    try {
+      await writeApproveContract({
+        address: hyprTokenAddress as `0x${string}`,
+        abi: erc20ApproveAbi,
+        functionName: 'approve',
+        args: [targetRegistryAddress, amountWei],
+      });
+    } catch (err) {
+      setAllowanceError(getErrorMessage(err));
+    }
+  };
+
+  if (!connectComplete) {
+    return <></>;
+  }
+
+  return (
+    <section className="step-card lock-step">
+      <div className="lock-header">
+        <div>
+          <h2>Approve HYPR</h2>
+          <p className="lock-subtitle">Authorize the TokenRegistry to lock HYPR from your connected wallet.</p>
+        </div>
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={() => void refreshLockStatus()}
+        >
+          Refresh balances
+        </button>
+      </div>
+
+      <div className="lock-grid">
+        <LockMetric
+          label="HYPR owned"
+          value={hyprOwned?.amount_formatted_hypr ?? 'Loading…'}
+          subValue={hyprOwned?.amount_raw_wei ? `${hyprOwned.amount_raw_wei} wei` : undefined}
+        />
+        <LockMetric
+          label="Current allowance"
+          value={tokeregistryAllowance?.amount_formatted_hypr ?? 'Loading…'}
+          subValue={tokeregistryAllowance?.amount_raw_wei ? `${tokeregistryAllowance.amount_raw_wei} wei` : undefined}
+        />
+      </div>
+
+      <form className="lock-form" onSubmit={handleSetAllowance}>
+        <div className="form-header">
+          <div>
+            <h3>Set lockable allowance</h3>
+            <p>Define how much HYPR the TokenRegistry may lock on your behalf.</p>
+          </div>
+          <button
+            type="submit"
+            className="secondary-button"
+            disabled={!walletConnected || isAllowancePending || isAllowanceConfirming}
+          >
+            {isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Approve'}
+          </button>
+        </div>
+        <div className="input-grid">
+          <label className="input-field">
+            <span>New allowance (HYPR)</span>
+            <input
+              type="number"
+              min="0"
+              step="0.000000000000000001"
+              placeholder="100.0"
+              value={allowanceInput}
+              onChange={(event) => setAllowanceInput(event.target.value)}
+            />
+          </label>
+          <label className="input-field" title="Current allowance">
+            <span>Current allowance</span>
+            <input type="text" value={tokeregistryAllowance?.amount_formatted_hypr ?? 'Loading…'} disabled />
+          </label>
+        </div>
+        {allowanceError && <div className="inline-error">{allowanceError}</div>}
+        {isAllowanceConfirmed && allowanceTxHash && (
+          <div className="inline-success">Allowance updated! Tx {shortHash(allowanceTxHash)}</div>
+        )}
+      </form>
+    </section>
+  );
+};
+
+interface LockStepProps {
+  connectComplete: boolean;
+  nodeId: string | null;
+  ownerAddress: string | null;
+  lockDetails: LockDetailsView | null;
+  hyprOwned: BalanceView | null;
+  hyprApproved: BalanceView | null;
+  tokeregistryAllowance: BalanceView | null;
+  availableToBind: BalanceView | null;
+  lastError: string | null;
+  isLoading: boolean;
+  refreshLockStatus: () => Promise<void>;
+  walletConnected: boolean;
+  walletAddress?: `0x${string}`;
+  targetRegistryAddress: `0x${string}`;
+}
+
+const LockStep = ({
+  connectComplete,
+  nodeId,
+  ownerAddress,
+  lockDetails,
+  hyprOwned,
+  hyprApproved,
+  tokeregistryAllowance,
+  availableToBind,
+  lastError,
+  isLoading,
+  refreshLockStatus,
+  walletConnected,
+  walletAddress,
+  targetRegistryAddress,
+}: LockStepProps) => {
+  const [amountInput, setAmountInput] = useState('');
+  const [durationInput, setDurationInput] = useState('');
+  const [manageError, setManageError] = useState<string | null>(null);
+
+  const {
+    data: manageTxHash,
+    error: manageWriteError,
+    isPending: isManagePending,
+    writeContract: writeManageLock,
+  } = useWriteContract();
+
+  const {
+    isLoading: isManageConfirming,
+    isSuccess: isManageConfirmed,
+  } = useWaitForTransactionReceipt({
+    hash: manageTxHash,
+  });
+
+  useEffect(() => {
+    if (manageWriteError) {
+      setManageError(getErrorMessage(manageWriteError));
+    }
+  }, [manageWriteError]);
+
+  useEffect(() => {
+    if (isManageConfirmed) {
       setAmountInput('');
       setDurationInput('');
-      refreshLockStatus();
+      void refreshLockStatus();
     }
-  }, [isConfirmed, refreshLockStatus]);
-
-  const {
-    isLoading: isTransferConfirming,
-    isSuccess: isTransferConfirmed,
-  } = useWaitForTransactionReceipt({
-    hash: transferTxHash,
-  });
-
-  const {
-    isLoading: isApproveConfirming,
-    isSuccess: isApproveConfirmed,
-  } = useWaitForTransactionReceipt({
-    hash: approveTxHash,
-  });
-
-  useEffect(() => {
-    if (isTransferConfirmed) {
-      setTransferAmountInput('');
-      setTransferDurationInput('');
-      setSrcNameInput('');
-      setDstNameInput('');
-      refreshLockStatus();
-    }
-  }, [isTransferConfirmed, refreshLockStatus]);
-
-  useEffect(() => {
-    if (isApproveConfirmed) {
-      setAllowanceInput('');
-      refreshLockStatus();
-    }
-  }, [isApproveConfirmed, refreshLockStatus]);
+  }, [isManageConfirmed, refreshLockStatus]);
 
   const handleManageLock = async (event: FormEvent) => {
     event.preventDefault();
     setManageError(null);
 
-    if (!isWalletConnected || !address) {
-      setManageError('Please connect a wallet to manage locks.');
+    if (!walletConnected || !walletAddress) {
+      setManageError('Connect a wallet to manage locks.');
       return;
     }
 
@@ -226,42 +517,238 @@ function App() {
       return;
     }
 
+    const durationSeconds = BigInt(durationInput);
+    if (durationSeconds < BigInt(MIN_LOCK_DURATION_SECONDS)) {
+      setManageError(`Duration must be at least ${formatDurationSeconds(MIN_LOCK_DURATION_SECONDS)}.`);
+      return;
+    }
+    if (durationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
+      setManageError(`Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`);
+      return;
+    }
+
+    const approvedWei = hyprApproved ? BigInt(hyprApproved.amount_raw_wei) : null;
+    const amountWei = parseEther(amountInput);
+    if (approvedWei !== null && amountWei > approvedWei) {
+      setManageError('Amount exceeds HYPR approved for locking.');
+      return;
+    }
+
     try {
-      const amountWei = parseEther(amountInput);
-      const durationSeconds = BigInt(durationInput);
-      const approvedWei = hyprApproved ? BigInt(hyprApproved.amount_raw_wei) : null;
-
-      if (durationSeconds < BigInt(MIN_LOCK_DURATION_SECONDS)) {
-        setManageError(`Duration must be at least ${formatDurationSeconds(MIN_LOCK_DURATION_SECONDS)}.`);
-        return;
-      }
-      if (durationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
-        setManageError(`Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`);
-        return;
-      }
-      if (approvedWei !== null && amountWei > approvedWei) {
-        setManageError('Amount exceeds HYPR approved for locking.');
-        return;
-      }
-
-      await writeContract({
+      await writeManageLock({
         address: targetRegistryAddress,
         abi: tokenRegistryAbi,
         functionName: 'manageLock',
         args: [amountWei, durationSeconds],
       });
     } catch (err) {
-      const friendly = decodeManageLockError(err);
-      setManageError(friendly);
+      setManageError(getErrorMessage(err));
     }
   };
 
-  const handleTransferRegistration = async (event: FormEvent) => {
+  if (!connectComplete) {
+    return <></>;
+  }
+
+  return (
+    <section className="step-card lock-step">
+      <div className="lock-header">
+        <div>
+          <h2>Lock overview</h2>
+          <p className="lock-subtitle">Review locked HYPR and confirm you meet the staking requirements.</p>
+        </div>
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={isLoading}
+          onClick={refreshLockStatus}
+        >
+          {isLoading ? <span className="spinner" /> : 'Refresh'}
+        </button>
+      </div>
+
+      <div className="lock-grid">
+        <LockMetric label="Node ID" value={nodeId ?? 'Unknown'} />
+        <LockMetric label="Owner address" value={ownerAddress ?? 'Resolving…'} />
+        <LockMetric
+          label="HYPR owned"
+          value={hyprOwned?.amount_formatted_hypr ?? 'Loading…'}
+          subValue={hyprOwned?.amount_raw_wei ? `${hyprOwned.amount_raw_wei} wei` : undefined}
+        />
+        <LockMetric
+          label="HYPR approved"
+          value={hyprApproved?.amount_formatted_hypr ?? 'Loading…'}
+          subValue={hyprApproved?.amount_raw_wei ? `${hyprApproved.amount_raw_wei} wei` : undefined}
+        />
+        <LockMetric
+          label="Registry allowance"
+          value={tokeregistryAllowance?.amount_formatted_hypr ?? 'Loading…'}
+          subValue={tokeregistryAllowance?.amount_raw_wei ? `${tokeregistryAllowance.amount_raw_wei} wei` : undefined}
+        />
+        <LockMetric
+          label="Available to bind"
+          value={availableToBind?.amount_formatted_hypr ?? '0 HYPR'}
+          subValue={availableToBind?.amount_raw_wei ? `${availableToBind.amount_raw_wei} wei` : undefined}
+        />
+      </div>
+
+      <div className="lock-detail-panel">
+        {lockDetails ? (
+          <>
+            <div className="lock-detail">
+              <span className="lock-detail-label">Locked amount</span>
+              <span className="lock-detail-value">{lockDetails.amount_formatted_hypr}</span>
+              <span className="lock-detail-sub">{lockDetails.amount_raw_wei} wei</span>
+            </div>
+            <div className="lock-detail">
+              <span className="lock-detail-label">Unlock timestamp</span>
+              <span className="lock-detail-value">{formatTimestamp(lockDetails.unlock_timestamp)}</span>
+              <span className="lock-detail-sub">
+                {lockDetails.remaining_seconds === Number.MAX_SAFE_INTEGER
+                  ? 'Unknown remaining time'
+                  : `${formatSeconds(lockDetails.remaining_seconds)} remaining`}
+              </span>
+            </div>
+          </>
+        ) : (
+          <div className="lock-empty">
+            <h3>No lock detected</h3>
+            <p>Lock HYPR to secure your node reservations. Once a lock is active it will appear here.</p>
+          </div>
+        )}
+      </div>
+
+      <div className="lock-forms">
+        <form className="lock-form" onSubmit={handleManageLock}>
+          <div className="form-header">
+            <div>
+              <h3>Manage lock</h3>
+              <p>Adjust locked HYPR amount and duration.</p>
+            </div>
+            <button
+              type="submit"
+              className="secondary-button"
+              disabled={!walletConnected || isManagePending || isManageConfirming}
+            >
+              {isManagePending || isManageConfirming ? <span className="spinner" /> : 'Submit'}
+            </button>
+          </div>
+          <div className="input-grid">
+            <label className="input-field">
+              <span>Amount (HYPR)</span>
+              <input
+                type="number"
+                min="0"
+                step="0.000000000000000001"
+                placeholder="250.0"
+                value={amountInput}
+                onChange={(event) => setAmountInput(event.target.value)}
+              />
+            </label>
+            <label className="input-field">
+              <span>Duration (seconds)</span>
+              <input
+                type="number"
+                min={MIN_LOCK_DURATION_SECONDS}
+                max={MAX_LOCK_DURATION_SECONDS}
+                step="1"
+                placeholder={MIN_LOCK_DURATION_SECONDS.toString()}
+                value={durationInput}
+                onChange={(event) => setDurationInput(event.target.value)}
+              />
+            </label>
+          </div>
+          {manageError && <div className="inline-error">{manageError}</div>}
+          {isManageConfirmed && manageTxHash && (
+            <div className="inline-success">Lock updated! Tx {shortHash(manageTxHash)}</div>
+          )}
+        </form>
+      </div>
+
+      {lastError && <div className="inline-error">{lastError}</div>}
+    </section>
+  );
+};
+
+interface LockMetricProps {
+  label: string;
+  value: string;
+  subValue?: string;
+}
+
+const LockMetric = ({ label, value, subValue }: LockMetricProps) => (
+  <div className="lock-card">
+    <span className="lock-card-label">{label}</span>
+    <span className="lock-card-value">{value}</span>
+    {subValue && <span className="lock-card-sub">{subValue}</span>}
+  </div>
+);
+
+interface BindStepProps {
+  connectComplete: boolean;
+  walletConnected: boolean;
+  walletAddress?: `0x${string}`;
+  targetRegistryAddress: `0x${string}`;
+  availableToBind: BalanceView | null;
+  bindings: BindingView[];
+  refreshLockStatus: () => Promise<void>;
+}
+
+const BindStep = ({
+  connectComplete,
+  walletConnected,
+  walletAddress,
+  targetRegistryAddress,
+  availableToBind,
+  bindings,
+  refreshLockStatus,
+}: BindStepProps) => {
+  const [srcNameInput, setSrcNameInput] = useState('');
+  const [dstNameInput, setDstNameInput] = useState('');
+  const [transferAmountInput, setTransferAmountInput] = useState('');
+  const [transferDurationInput, setTransferDurationInput] = useState('');
+  const [transferError, setTransferError] = useState<string | null>(null);
+
+  const {
+    data: transferTxHash,
+    error: transferWriteError,
+    isPending: isTransferPending,
+    writeContract: writeTransferContract,
+  } = useWriteContract();
+
+  const {
+    isLoading: isTransferConfirming,
+    isSuccess: isTransferConfirmed,
+  } = useWaitForTransactionReceipt({
+    hash: transferTxHash,
+  });
+
+  useEffect(() => {
+    if (transferWriteError) {
+      setTransferError(getErrorMessage(transferWriteError));
+    }
+  }, [transferWriteError]);
+
+  useEffect(() => {
+    if (isTransferConfirmed) {
+      setSrcNameInput('');
+      setDstNameInput('');
+      setTransferAmountInput('');
+      setTransferDurationInput('');
+      void refreshLockStatus();
+    }
+  }, [isTransferConfirmed, refreshLockStatus]);
+
+  if (!connectComplete) {
+    return <></>;
+  }
+
+  const handleTransfer = async (event: FormEvent) => {
     event.preventDefault();
     setTransferError(null);
 
-    if (!isWalletConnected || !address) {
-      setTransferError('Please connect a wallet to transfer registrations.');
+    if (!walletConnected || !walletAddress) {
+      setTransferError('Connect a wallet to transfer registrations.');
       return;
     }
 
@@ -269,14 +756,27 @@ function App() {
       setTransferError('Destination name is required.');
       return;
     }
+
     if (!transferAmountInput || Number(transferAmountInput) <= 0) {
       setTransferError('Enter a positive HYPR amount to transfer.');
       return;
     }
+
+    const maxAmountWei = parseEther(transferAmountInput);
+    if (availableToBind) {
+      const availableWei = BigInt(availableToBind.amount_raw_wei);
+      if (maxAmountWei > availableWei) {
+        setTransferError('Amount exceeds HYPR available to bind.');
+        return;
+      }
+    }
+
     if (!transferDurationInput || Number(transferDurationInput) < MIN_LOCK_DURATION_SECONDS) {
       setTransferError(`Duration must be at least ${formatDurationSeconds(MIN_LOCK_DURATION_SECONDS)}.`);
       return;
     }
+
+    const durationSeconds = BigInt(transferDurationInput);
 
     try {
       const srcHash = resolveNamehash(srcNameInput);
@@ -286,392 +786,193 @@ function App() {
         return;
       }
 
-      const maxAmountWei = parseEther(transferAmountInput);
-      const durationSeconds = BigInt(transferDurationInput);
-
       await writeTransferContract({
         address: targetRegistryAddress,
-        abi: tokenRegistryAbi,
+        abi: transferRegistrationAbi,
         functionName: 'transferRegistration',
         args: [srcHash, dstHash, maxAmountWei, durationSeconds],
       });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to submit transaction.';
-      setTransferError(message);
-    }
-  };
-
-  const handleSetAllowance = async (event: FormEvent) => {
-    event.preventDefault();
-    setAllowanceError(null);
-
-    if (!isWalletConnected || !address) {
-      setAllowanceError('Please connect a wallet to set allowance.');
-      return;
-    }
-
-    if (!hyprTokenAddress) {
-      setAllowanceError('HYPR token address unavailable.');
-      return;
-    }
-
-    if (!allowanceInput && allowanceInput !== '0') {
-      setAllowanceError('Enter an allowance amount.');
-      return;
-    }
-
-    const allowanceValue = Number(allowanceInput);
-    if (Number.isNaN(allowanceValue) || allowanceValue < 0) {
-      setAllowanceError('Enter a non-negative allowance.');
-      return;
-    }
-
-    try {
-      const amountWei = parseEther(allowanceInput || '0');
-      if (hyprOwned) {
-        const ownedWei = BigInt(hyprOwned.amount_raw_wei);
-        if (amountWei > ownedWei) {
-          setAllowanceError('Allowance cannot exceed wallet HYPR balance.');
-          return;
-        }
-      }
-      await writeApproveContract({
-        address: hyprTokenAddress as `0x${string}`,
-        abi: erc20ApproveAbi,
-        functionName: 'approve',
-        args: [targetRegistryAddress, amountWei],
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to submit transaction.';
-      setAllowanceError(message);
+    } catch (error) {
+      setTransferError(getErrorMessage(error));
     }
   };
 
   return (
-    <div className="app">
-      <header className="app-header">
-        <div className="header-top">
-          <h1 className="app-title">🔐 Bind & Lock</h1>
-          <ConnectButton chainStatus="icon" showBalance={false} />
+    <section className="step-card lock-step">
+      <div className="lock-header">
+        <div>
+          <h2>Manage bindings</h2>
+          <p className="lock-subtitle">View current registrations and bind HYPR to new names.</p>
         </div>
-        <div className="node-info">
-          {isConnected ? (
-            <>
-              Connected as <span className="node-id">{nodeId}</span>
-            </>
-          ) : (
-            <span className="not-connected">Not connected to Hyperware</span>
-          )}
-        </div>
-      </header>
+        <button type="button" className="secondary-button" onClick={() => void refreshLockStatus()}>
+          Refresh
+        </button>
+      </div>
 
-      {error && (
-        <div className="error error-message">
-          {error}
-          <button onClick={clearError} style={{ marginLeft: '1rem' }}>
-            Dismiss
+      <div className="lock-grid">
+        <LockMetric
+          label="HYPR available to bind"
+          value={availableToBind?.amount_formatted_hypr ?? '0 HYPR'}
+          subValue={availableToBind?.amount_raw_wei ? `${availableToBind.amount_raw_wei} wei` : undefined}
+        />
+        <LockMetric label="Active bindings" value={bindings.length.toString()} />
+      </div>
+
+      <div className="lock-detail-panel">
+        {bindings.length === 0 ? (
+          <div className="lock-empty">
+            <h3>No bindings detected</h3>
+            <p>Bind HYPR to a namehash to kick off registration transfers.</p>
+          </div>
+        ) : (
+          bindings.map((binding) => (
+            <div className="lock-detail" key={binding.namehash}>
+              <span className="lock-detail-label">{binding.name ?? 'Unknown name'}</span>
+              <span className="lock-detail-value">{binding.amount_formatted_hypr}</span>
+              <span className="lock-detail-sub">Unlocks {formatTimestamp(binding.unlock_timestamp)}</span>
+            </div>
+          ))
+        )}
+      </div>
+
+      <form className="lock-form" onSubmit={handleTransfer}>
+        <div className="form-header">
+          <div>
+            <h3>Transfer registration</h3>
+            <p>Move HYPR from the default pool to a destination namehash.</p>
+          </div>
+          <button
+            type="submit"
+            className="secondary-button"
+            disabled={!walletConnected || isTransferPending || isTransferConfirming}
+          >
+            {isTransferPending || isTransferConfirming ? <span className="spinner" /> : 'Bind'}
           </button>
         </div>
-      )}
+        <div className="input-grid">
+          <label className="input-field">
+            <span>Source name</span>
+            <input
+              type="text"
+              placeholder="optional.name.eth"
+              value={srcNameInput}
+              onChange={(event) => setSrcNameInput(event.target.value)}
+            />
+          </label>
+          <label className="input-field">
+            <span>Destination name</span>
+            <input
+              type="text"
+              placeholder="example.name.eth"
+              value={dstNameInput}
+              onChange={(event) => setDstNameInput(event.target.value)}
+              required
+            />
+          </label>
+          <label className="input-field">
+            <span>HYPR amount</span>
+            <input
+              type="number"
+              min="0"
+              step="0.000000000000000001"
+              placeholder="10.0"
+              value={transferAmountInput}
+              onChange={(event) => setTransferAmountInput(event.target.value)}
+              required
+            />
+          </label>
+          <label className="input-field">
+            <span>Duration (seconds)</span>
+            <input
+              type="number"
+              min={MIN_LOCK_DURATION_SECONDS}
+              max={MAX_LOCK_DURATION_SECONDS}
+              step="1"
+              placeholder={MIN_LOCK_DURATION_SECONDS.toString()}
+              value={transferDurationInput}
+              onChange={(event) => setTransferDurationInput(event.target.value)}
+              required
+            />
+          </label>
+        </div>
+        {transferError && <div className="inline-error">{transferError}</div>}
+        {isTransferConfirmed && transferTxHash && (
+          <div className="inline-success">Binding updated! Tx {shortHash(transferTxHash)}</div>
+        )}
+      </form>
+    </section>
+  );
+};
 
-      {isConnected && (
-        <>
-        <section className="section">
-          <h2 className="section-title">Lock Details</h2>
-          <p>The app reads on-chain lock data for this node’s owner.</p>
+interface BottomTabsProps {
+  steps: StepConfig[];
+  activeStep: StepId;
+  canAccessStep: (id: StepId) => boolean;
+  onSelect: (id: StepId) => void;
+}
 
-          <div className="card">
-            <div className="row">
-              <span className="label">Node ID</span>
-              <span>{nodeId}</span>
-            </div>
-            <div className="row">
-              <span className="label">Owner Address</span>
-              <span>{ownerAddress ?? 'Resolving...'}</span>
-            </div>
+const BottomTabs = ({ steps, activeStep, canAccessStep, onSelect }: BottomTabsProps) => (
+  <nav className="bottom-tabs">
+    {steps.map((step, index) => {
+      const accessible = canAccessStep(step.id);
+      const isActive = activeStep === step.id;
+      const icon = iconGlyph[step.icon];
+      return (
+        <button
+          type="button"
+          key={step.id}
+          className={`bottom-tab${isActive ? ' active' : ''}`}
+          disabled={!accessible}
+          onClick={() => onSelect(step.id)}
+        >
+          <span className="tab-icon" aria-hidden>
+            {icon}
+          </span>
+          <span className="tab-title">{step.title}</span>
+        </button>
+      );
+    })}
+  </nav>
+);
 
-            {lockDetails ? (
-              <>
-                <div className="row">
-                  <span className="label">Locked amount</span>
-                  <span>
-                    {lockDetails.amount_formatted_hypr}
-                    <br />
-                    <small>{lockDetails.amount_raw_wei} wei</small>
-                  </span>
-                </div>
-                <div className="row">
-                  <span className="label">Unlock Timestamp</span>
-                  <span>{formatTimestamp(lockDetails.unlock_timestamp)}</span>
-                </div>
-                <div className="row">
-                  <span className="label">Remaining Seconds</span>
-                  <span>{lockDetails.remaining_seconds.toLocaleString()}</span>
-                </div>
-              </>
-            ) : (
-              <p>No lock data found for this account.</p>
-            )}
+const iconGlyph: Record<StepIcon, string> = {
+  check: '✔',
+  lock: '🔒',
+  chain: '⛓',
+};
 
-            {lastError && (
-              <div className="error inline-error">{lastError}</div>
-            )}
+interface TopStatusBarProps {
+  hyperConnected: boolean;
+  walletConnected: boolean;
+  walletAddress?: `0x${string}`;
+}
 
-            <button onClick={refreshLockStatus} disabled={isLoading} className="primary-button">
-              {isLoading ? <span className="spinner" /> : 'Refresh'}
-            </button>
-          </div>
-        </section>
-
-        <section className="section">
-          <h2 className="section-title">Bindings List</h2>
-          <p>Each active registration and the HYPR bound to it.</p>
-          <div className="card summary-card">
-            <div className="row">
-              <span className="label">Available HYPR to bind</span>
-              <span>{availableToBind ? availableToBind.amount_formatted_hypr : '0 HYPR'}</span>
-            </div>
-          </div>
-
-          <div className="card bindings-list">
-            {bindings.length === 0 ? (
-              <p>No bindings found.</p>
-            ) : (
-              bindings.map((binding) => (
-                <div className="binding-row" key={binding.namehash}>
-                  <div className="row">
-                    <span className="label">Name</span>
-                    <span>{binding.name ?? 'Unknown'}</span>
-                  </div>
-                  <div className="row">
-                    <span className="label">Namehash</span>
-                    <span className="mono">{binding.namehash}</span>
-                  </div>
-                  <div className="row">
-                    <span className="label">Amount</span>
-                    <span>
-                      {binding.amount_formatted_hypr}
-                      <br />
-                      <small>{binding.amount_raw_wei} wei</small>
-                    </span>
-                  </div>
-                  <div className="row">
-                    <span className="label">Unlock Timestamp</span>
-                    <span>{formatTimestamp(binding.unlock_timestamp)}</span>
-                  </div>
-                  <div className="row">
-                    <span className="label">Remaining Seconds</span>
-                    <span>{binding.remaining_seconds.toLocaleString()}</span>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-
-        <section className="section">
-          <h2 className="section-title">Set Lockable Allowance</h2>
-          <p>Approve how much HYPR the TokenRegistry contract may use for locks.</p>
-
-          <form className="card manage-lock-form" onSubmit={handleSetAllowance}>
-            <div className="row">
-              <span className="label">HYPR owned by account</span>
-              <span>{hyprOwned ? hyprOwned.amount_formatted_hypr : 'Loading...'}</span>
-            </div>
-            <div className="row">
-              <span className="label">Current lockable allowance</span>
-              <span>{tokeregistryAllowance ? tokeregistryAllowance.amount_formatted_hypr : 'Loading...'}</span>
-            </div>
-            <div className="row">
-              <label className="label" htmlFor="allowanceInput">
-                New allowance (HYPR)
-              </label>
-              <input
-                id="allowanceInput"
-                type="number"
-                min="0"
-                step="0.000000000000000001"
-                placeholder="100.0"
-                value={allowanceInput}
-                onChange={(e) => setAllowanceInput(e.target.value)}
-              />
-            </div>
-
-            {allowanceError && <div className="error inline-error">{allowanceError}</div>}
-            {(isApprovePending || isApproveConfirming) && (
-              <div className="info inline-info">Submitting approval transaction…</div>
-            )}
-            {isApproveConfirmed && approveTxHash && (
-              <div className="success inline-success">
-                Allowance updated! Tx {approveTxHash.slice(0, 8)}…{approveTxHash.slice(-6)}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              className="primary-button"
-              disabled={!isWalletConnected || isApprovePending || isApproveConfirming || !hyprTokenAddress}
-            >
-              {isApprovePending || isApproveConfirming ? <span className="spinner" /> : 'Set new allowance'}
-            </button>
-          </form>
-        </section>
-
-        <section className="section">
-          <h2 className="section-title">Manage Lock</h2>
-          <p>Use your connected wallet to create or extend a lock via TokenRegistry.</p>
-
-          <form className="card manage-lock-form" onSubmit={handleManageLock}>
-            <div className="row">
-              <span className="label">HYPR owned by account</span>
-              <span>{hyprOwned ? hyprOwned.amount_formatted_hypr : 'Loading...'}</span>
-            </div>
-            <div className="row">
-              <span className="label">Lockable HYPR available</span>
-              <span>
-                {hyprApproved ? hyprApproved.amount_formatted_hypr : 'Loading...'}
-                <br />
-                <small>(Lockable balance, less any HYPR already locked)</small>
-              </span>
-            </div>
-            <div className="row">
-              <label className="label" htmlFor="amountInput">
-                HYPR Amount
-              </label>
-              <input
-                id="amountInput"
-                type="number"
-                min="0"
-                step="0.000000000000000001"
-                placeholder="1.0"
-                value={amountInput}
-                onChange={(e) => setAmountInput(e.target.value)}
-              />
-            </div>
-
-            <div className="row">
-              <label className="label" htmlFor="durationInput">
-                Duration (seconds)
-              </label>
-              <input
-                id="durationInput"
-                type="number"
-                min={MIN_LOCK_DURATION_SECONDS}
-                max={MAX_LOCK_DURATION_SECONDS}
-                step="1"
-                placeholder={MIN_LOCK_DURATION_SECONDS.toString()}
-                value={durationInput}
-                onChange={(e) => setDurationInput(e.target.value)}
-              />
-            </div>
-
-            {manageError && <div className="error inline-error">{manageError}</div>}
-            {(isWritePending || isConfirming) && (
-              <div className="info inline-info">Waiting for wallet confirmation and on-chain receipt…</div>
-            )}
-            {isConfirmed && txHash && (
-              <div className="success inline-success">
-                Lock updated! Tx {txHash.slice(0, 8)}…{txHash.slice(-6)}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              className="primary-button"
-              disabled={!isWalletConnected || isWritePending || isConfirming}
-            >
-              {isWritePending || isConfirming ? <span className="spinner" /> : 'Submit'}
-            </button>
-          </form>
-        </section>
-
-        <section className="section">
-          <h2 className="section-title">Manage Bindings</h2>
-          <p>Move locked HYPR from one Hypermap entry to another.</p>
-
-          <form className="card manage-lock-form" onSubmit={handleTransferRegistration}>
-            <div className="row">
-              <label className="label" htmlFor="srcNameInput">
-                Source Hypermap name (blank for Available HYPR)
-              </label>
-              <input
-                id="srcNameInput"
-                type="text"
-                placeholder="leave blank for Available HYPR"
-                value={srcNameInput}
-                onChange={(e) => setSrcNameInput(e.target.value)}
-              />
-            </div>
-
-            <div className="row">
-              <label className="label" htmlFor="dstNameInput">
-                Destination Hypermap name
-              </label>
-              <input
-                id="dstNameInput"
-                type="text"
-                placeholder="sample-node.os"
-                value={dstNameInput}
-                onChange={(e) => setDstNameInput(e.target.value)}
-                required
-              />
-            </div>
-
-            <div className="row">
-              <label className="label" htmlFor="transferAmountInput">
-                HYPR amount
-              </label>
-              <input
-                id="transferAmountInput"
-                type="number"
-                min="0"
-                step="0.000000000000000001"
-                placeholder="1.0"
-                value={transferAmountInput}
-                onChange={(e) => setTransferAmountInput(e.target.value)}
-              />
-            </div>
-
-            <div className="row">
-              <label className="label" htmlFor="transferDurationInput">
-                Duration (seconds)
-              </label>
-              <input
-                id="transferDurationInput"
-                type="number"
-                min={MIN_LOCK_DURATION_SECONDS}
-                max={MAX_LOCK_DURATION_SECONDS}
-                step="1"
-                placeholder={MIN_LOCK_DURATION_SECONDS.toString()}
-                value={transferDurationInput}
-                onChange={(e) => setTransferDurationInput(e.target.value)}
-              />
-            </div>
-
-            {transferError && <div className="error inline-error">{transferError}</div>}
-            {(isTransferPending || isTransferConfirming) && (
-              <div className="info inline-info">Submitting transfer transaction…</div>
-            )}
-            {isTransferConfirmed && transferTxHash && (
-              <div className="success inline-success">
-                Registration updated! Tx {transferTxHash.slice(0, 8)}…{transferTxHash.slice(-6)}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              className="primary-button"
-              disabled={!isWalletConnected || isTransferPending || isTransferConfirming}
-            >
-              {isTransferPending || isTransferConfirming ? <span className="spinner" /> : 'Bind'}
-            </button>
-          </form>
-        </section>
-        </>
-      )}
+const TopStatusBar = ({ hyperConnected, walletConnected, walletAddress }: TopStatusBarProps) => {
+  const connectedState = walletConnected && walletAddress;
+  return (
+    <div className={`top-banner ${connectedState ? 'banner-ready' : 'banner-warning'}`}>
+      <div className="banner-main">
+        <span className="banner-title">
+          {connectedState ? 'Provider connected' : 'Connect your wallet'}
+        </span>
+        <span className="banner-subtitle">
+          {connectedState
+            ? shortenAddress(walletAddress)
+            : 'Approvals and locks require a connected provider.'}
+        </span>
+      </div>
+      <div className="banner-actions">
+        <span className={`banner-chip ${hyperConnected ? 'online' : 'offline'}`}>
+          {hyperConnected ? 'Hyperware online' : 'Hyperware offline'}
+        </span>
+        <ConnectButton chainStatus="icon" showBalance={false} />
+      </div>
     </div>
   );
-}
+};
+
+const shortenAddress = (address: `0x${string}`) => `${address.slice(0, 6)}…${address.slice(-4)}`;
+const shortHash = (hash: `0x${string}`) => `${hash.slice(0, 8)}…${hash.slice(-6)}`;
 
 const formatTimestamp = (seconds: number) => {
   if (!seconds) return '0';
@@ -679,16 +980,14 @@ const formatTimestamp = (seconds: number) => {
   return new Date(seconds * 1000).toLocaleString();
 };
 
-const formatDurationSeconds = (seconds: number) => {
-  const weeks = seconds / 604800;
-  if (Number.isInteger(weeks)) {
-    return `${weeks.toLocaleString()} week${weeks === 1 ? '' : 's'} (${seconds.toLocaleString()} seconds)`;
-  }
-  const days = seconds / 86400;
-  if (Number.isInteger(days)) {
-    return `${days.toLocaleString()} day${days === 1 ? '' : 's'} (${seconds.toLocaleString()} seconds)`;
-  }
-  return `${seconds.toLocaleString()} seconds`;
+const formatSeconds = (value: number) => {
+  if (value <= 0) return '0s';
+  const days = Math.floor(value / 86400);
+  const hours = Math.floor((value % 86400) / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
 };
 
 const isHexHash = (value: string): value is `0x${string}` =>
@@ -715,29 +1014,18 @@ const resolveNamehash = (input: string): `0x${string}` => {
   }, ZERO_NAMEHASH);
 };
 
-const decodeManageLockError = (err: unknown): string => {
-  let fallback = 'Failed to submit transaction.';
-
-  if (err instanceof BaseError) {
-    const walked = err.walk((error) => error instanceof ContractFunctionRevertedError);
-    const revertError = walked instanceof ContractFunctionRevertedError ? walked : null;
-    const decoded = revertError?.data;
-
-    if (decoded && 'errorName' in decoded && decoded.errorName === 'InvalidDuration') {
-      const [, min, max] = decoded.args as readonly [bigint, bigint, bigint];
-      return `Duration must be between ${formatDurationSeconds(Number(min))} and ${formatDurationSeconds(
-        Number(max),
-      )}.`;
-    }
-
-    return revertError?.shortMessage ?? err.shortMessage ?? fallback;
+const formatDurationSeconds = (seconds: number) => {
+  const weeks = seconds / 604800;
+  if (Number.isInteger(weeks)) {
+    return `${weeks.toLocaleString()} week${weeks === 1 ? '' : 's'} (${seconds.toLocaleString()} seconds)`;
   }
-
-  if (err instanceof Error) {
-    return err.message;
+  const days = seconds / 86400;
+  if (Number.isInteger(days)) {
+    return `${days.toLocaleString()} day${days === 1 ? '' : 's'} (${seconds.toLocaleString()} seconds)`;
   }
-
-  return fallback;
+  return `${seconds.toLocaleString()} seconds`;
 };
+
+const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Action failed.');
 
 export default App;

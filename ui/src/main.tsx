@@ -16,7 +16,7 @@ if (!(window as { Buffer?: typeof Buffer }).Buffer) {
 }
 
 const wagmiConfig = getDefaultConfig({
-  appName: 'Bind & Lock',
+  appName: 'Lock & Bind',
   projectId: 'c6da298e8ee4e4b00ea32cd4c20c40af',
   chains: [base, anvil],
   ssr: false,

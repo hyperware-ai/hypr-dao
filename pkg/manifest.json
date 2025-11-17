@@ -1,7 +1,7 @@
 [
   {
-    "process_name": "bind-and-lock",
-    "process_wasm_path": "/bind-and-lock.wasm",
+    "process_name": "lock-and-bind",
+    "process_wasm_path": "/lock-and-bind.wasm",
     "on_exit": "Restart",
     "request_networking": false,
     "request_capabilities": [

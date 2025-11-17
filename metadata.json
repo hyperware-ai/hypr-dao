@@ -1,9 +1,9 @@
 {
-  "name": "BindAndLock",
+  "name": "Lock & Bind",
   "description": "A minimal skeleton app for the Hyperware platform using the Hyperapp framework - demonstrates basic state management and HTTP endpoints",
   "image": "",
   "properties": {
-    "package_name": "bind-and-lock",
+    "package_name": "lock-and-bind",
     "current_version": "0.1.0",
     "publisher": "template.os",
     "mirrors": [],

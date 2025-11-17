@@ -6,13 +6,13 @@ This skeleton provides a starting point for building Hyperware applications with
 Example prompt (works well with Codex):
 
 ```
-Use `kit new myappname --template bind-and-lock --ui`, (replacing myappname with appropriate app name) to make a template in `/desired_folder`, which you will modify to build the following app:
+Use `kit new myappname --template lock-and-bind --ui`, (replacing myappname with appropriate app name) to make a template in `/desired_folder`, which you will modify to build the following app:
 
 Insert your app spec here, e.g.:
 Todo List with P2P Sync.
 A collaborative TODO list where items sync between nodes.
 
-Write a spec, and then implement it step by step. Use the README.md given in bind-and-lock to find instructions on specific details.
+Write a spec, and then implement it step by step. Use the README.md given in lock-and-bind to find instructions on specific details.
 At the end, I should be able to run `kit bs —hyperapp` and manually test that the app works.
 ```
 
@@ -36,10 +36,10 @@ kit build --hyperapp
 ## Project Structure
 
 ```
-bind-and-lock/
+lock-and-bind/
 ├── Cargo.toml          # Workspace configuration
 ├── metadata.json       # App metadata
-├── bind-and-lock/       # Main Rust process
+├── lock-and-bind/       # Main Rust process
 │   ├── Cargo.toml      # Process dependencies
 │   └── src/
 │       ├── lib.rs      # Main app logic (well-commented)
@@ -127,7 +127,7 @@ Your app's state is automatically persisted based on the `save_config` option:
 
 ### 1. Modify App State
 
-Edit `AppState` in `bind-and-lock/src/lib.rs`:
+Edit `AppState` in `lock-and-bind/src/lib.rs`:
 ```rust
 #[derive(Default, Serialize, Deserialize)]
 pub struct AppState {
@@ -167,8 +167,8 @@ If sending messages between nodes, set:
 
 ### 4. Update Frontend
 
-1. Add types in `ui/src/types/bind-and-lock.ts`
-2. Update store in `ui/src/store/bind-and-lock.ts`
+1. Add types in `ui/src/types/lock-and-bind.ts`
+2. Update store in `ui/src/store/lock-and-bind.ts`
 3. Modify UI in `ui/src/App.tsx`
 
 ## Common Issues and Solutions
@@ -218,7 +218,7 @@ You create types that end up in the API by defining and using them in functions 
 
 Look carefully at `IMPLEMENTATION_PLAN.md` and in the `example-apps/` directory, if relevant.
 
-Work from the existing template that exists at `bind-and-lock/` and `ui/`.
+Work from the existing template that exists at `lock-and-bind/` and `ui/`.
 
 Note in particular that bindings for the UI will be generated when the app is built with `kit build --hyperapp`.
 As such, first design and implement the backend; the interface will be generated from the backend; finally design and implement the frontend to consume the interface.
