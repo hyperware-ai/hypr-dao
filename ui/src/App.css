@@ -363,6 +363,12 @@
   gap: 0.5rem;
 }
 
+.warning-card .lock-card {
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
 .warning-button {
   align-self: flex-start;
   border: 1px solid rgba(255, 149, 0, 0.8);
@@ -474,6 +480,11 @@
   margin: 0.25rem 0 0;
   color: var(--text-secondary);
   font-size: 0.9rem;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-start;
 }
 
 .refresh-inline-button {

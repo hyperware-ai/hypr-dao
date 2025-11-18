@@ -721,9 +721,6 @@ const LockStep = ({
             <h3>{lockHeaderTitle}</h3>
             <p>{lockHeaderSubtitle}</p>
           </div>
-          <button type="submit" className="secondary-button" disabled={lockButtonDisabled}>
-            {isManagePending || isManageConfirming || isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Lock'}
-          </button>
         </div>
         <div className="input-grid">
           <label className="input-field">
@@ -748,6 +745,11 @@ const LockStep = ({
             unlockPreview={lockUnlockPreview}
           />
         )}
+        <div className="form-actions">
+          <button type="submit" className="secondary-button" disabled={lockButtonDisabled}>
+            {isManagePending || isManageConfirming || isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Lock'}
+          </button>
+        </div>
         {manageError && (
           <div className="inline-error" ref={manageErrorRef}>
             {manageError.text}
