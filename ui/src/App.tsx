@@ -155,6 +155,37 @@ const parseDurationInputValue = (value: string) => {
   return Math.floor(parsed);
 };
 
+const durationInputsFromSeconds = (seconds: bigint): DurationInputValues => {
+  let remaining = seconds;
+  const units: [DurationField, bigint][] = [
+    ['years', BigInt(SECONDS_PER_YEAR)],
+    ['months', BigInt(SECONDS_PER_MONTH)],
+    ['weeks', BigInt(SECONDS_PER_WEEK)],
+    ['days', BigInt(SECONDS_PER_DAY)],
+    ['hours', BigInt(SECONDS_PER_HOUR)],
+    ['minutes', BigInt(SECONDS_PER_MINUTE)],
+  ];
+  const result: DurationInputValues = {
+    years: '0',
+    months: '0',
+    weeks: '0',
+    days: '0',
+    hours: '0',
+    minutes: '0',
+    seconds: '0',
+  };
+  units.forEach(([field, unit]) => {
+    if (unit === 0n) {
+      return;
+    }
+    const value = remaining / unit;
+    remaining %= unit;
+    result[field] = value.toString();
+  });
+  result.seconds = remaining.toString();
+  return result;
+};
+
 const calculateRequiredAdditionalDuration = (
   existingAmount: bigint,
   existingDuration: bigint,
@@ -437,6 +468,21 @@ const LockStep = ({
   const durationParts = useMemo(() => inputsToDurationParts(durationInputs), [durationInputs]);
   const lockedAmountWei = lockDetails?.amount_raw_wei ? BigInt(lockDetails.amount_raw_wei) : 0n;
   const hasExistingLock = lockedAmountWei > 0n;
+  const lastDefaultDurationSeconds = useRef<number | null>(null);
+  useEffect(() => {
+    if (!hasExistingLock || !lockDetails) {
+      lastDefaultDurationSeconds.current = null;
+      return;
+    }
+    const remainingSeconds = lockDetails.remaining_seconds ?? 0;
+    if (remainingSeconds === 0 || lastDefaultDurationSeconds.current === remainingSeconds) {
+      return;
+    }
+    const parts = durationInputsFromSeconds(BigInt(remainingSeconds));
+    setDurationInputs(parts);
+    setLockEndDateInput(new Date(lockDetails.unlock_timestamp * 1000));
+    lastDefaultDurationSeconds.current = remainingSeconds;
+  }, [hasExistingLock, lockDetails]);
   const lockDurationSecondsFromInputs = useMemo(
     () => durationPartsToSeconds(durationParts),
     [durationParts],
@@ -656,28 +702,39 @@ const LockStep = ({
       pushManageError(`Duration must be at least ${formatDurationSeconds(MIN_LOCK_DURATION_SECONDS)}.`);
       return;
     }
-    if (selectedLockDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
-      pushManageError(`Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`);
+  if (selectedLockDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
+    pushManageError(`Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`);
+    return;
+  }
+
+  const amountWei = additionalAmountWei;
+  const allowanceWei = tokeregistryAllowance ? BigInt(tokeregistryAllowance.amount_raw_wei) : 0n;
+  const requiredAllowance = amountWei > allowanceWei ? amountWei - allowanceWei : 0n;
+  let submittedDurationSeconds = selectedLockDurationSeconds;
+  if (hasExistingLock && amountWei > 0n) {
+    const requiredDuration = calculateRequiredAdditionalDuration(
+      existingAmountWei,
+      existingDurationSeconds,
+      amountWei,
+      selectedLockDurationSeconds,
+    );
+    if (!requiredDuration) {
+      pushManageError('Unable to compute required duration. Adjust amount or duration.');
       return;
     }
-
-    const amountWei = additionalAmountWei;
-    const allowanceWei = tokeregistryAllowance ? BigInt(tokeregistryAllowance.amount_raw_wei) : 0n;
-    const requiredAllowance = amountWei > allowanceWei ? amountWei - allowanceWei : 0n;
-    let submittedDurationSeconds = selectedLockDurationSeconds;
-    if (hasExistingLock && amountWei > 0n) {
-      const requiredDuration = calculateRequiredAdditionalDuration(
-        existingAmountWei,
-        existingDurationSeconds,
-        amountWei,
-        selectedLockDurationSeconds,
+    if (
+      requiredDuration < BigInt(MIN_LOCK_DURATION_SECONDS) ||
+      requiredDuration > BigInt(MAX_LOCK_DURATION_SECONDS)
+    ) {
+      pushManageError(
+        `Computed duration must be between ${formatDurationSeconds(
+          MIN_LOCK_DURATION_SECONDS,
+        )} and ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`,
       );
-      if (!requiredDuration) {
-        pushManageError('Unable to compute required duration. Adjust amount or duration.');
-        return;
-      }
-      submittedDurationSeconds = requiredDuration;
+      return;
     }
+    submittedDurationSeconds = requiredDuration;
+  }
 
     if (requiredAllowance > 0n) {
       if (!hyprTokenAddress) {
@@ -849,7 +906,9 @@ const LockStep = ({
               hasExistingLock ? lockUnlockPreview ?? undefined : undefined
             }
             resolvedDurationLabel={
-              hasExistingLock ? formatSeconds(Number(requiredDurationSeconds)) : undefined
+              hasExistingLock && additionalAmountWei > 0n
+                ? formatSeconds(Number(requiredDurationSeconds))
+                : undefined
             }
             mode={lockDurationMode}
             onModeChange={setLockDurationMode}
