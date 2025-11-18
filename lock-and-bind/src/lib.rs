@@ -184,7 +184,6 @@ impl AppState {
         } else {
             available_hypr
         };
-        let total_allowance = hypr_allowance + details.amount;
 
         self.owner_address = Some(owner.to_string());
         self.lock_details = Some(LockDetailsView::from(details));
@@ -211,7 +210,7 @@ impl AppState {
 
         self.hypr_owned = Some(BalanceView::from(available_hypr));
         self.hypr_approved = Some(BalanceView::from(approved));
-        self.tokeregistry_allowance = Some(BalanceView::from(total_allowance));
+        self.tokeregistry_allowance = Some(BalanceView::from(hypr_allowance));
         self.hypr_token_address = Some(format_address(hypr_address));
         self.bindings = bind_views;
         if self.available_to_bind.is_none() {

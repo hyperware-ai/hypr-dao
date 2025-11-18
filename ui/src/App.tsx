@@ -312,6 +312,7 @@ const LockStep = ({
   const [amountInput, setAmountInput] = useState('');
   const [durationInput, setDurationInput] = useState('');
   const [manageError, setManageError] = useState<string | null>(null);
+  const [manageSuccessHash, setManageSuccessHash] = useState<`0x${string}` | null>(null);
 
   const [pendingLock, setPendingLock] = useState<{ amount: bigint; duration: bigint } | null>(null);
 
@@ -357,6 +358,13 @@ const LockStep = ({
   }, [manageWriteError]);
 
   useEffect(() => {
+    if (manageError) {
+      const timeout = setTimeout(() => setManageError(null), 10_000);
+      return () => clearTimeout(timeout);
+    }
+  }, [manageError]);
+
+  useEffect(() => {
     if (isManageConfirmed) {
       setAmountInput('');
       setDurationInput('');
@@ -364,6 +372,19 @@ const LockStep = ({
       void refreshLockStatus();
     }
   }, [isManageConfirmed, refreshLockStatus]);
+
+  useEffect(() => {
+    if (isManageConfirmed && manageTxHash) {
+      setManageSuccessHash(manageTxHash);
+    }
+  }, [isManageConfirmed, manageTxHash]);
+
+  useEffect(() => {
+    if (manageSuccessHash) {
+      const timeout = setTimeout(() => setManageSuccessHash(null), 10_000);
+      return () => clearTimeout(timeout);
+    }
+  }, [manageSuccessHash]);
 
   useEffect(() => {
     if (isAllowanceConfirmed && pendingLock) {
@@ -551,8 +572,8 @@ const LockStep = ({
           </label>
         </div>
         {manageError && <div className="inline-error">{manageError}</div>}
-        {isManageConfirmed && manageTxHash && (
-          <div className="inline-success">Lock updated! Tx {shortHash(manageTxHash)}</div>
+        {manageSuccessHash && (
+          <div className="inline-success">Lock updated! Tx {shortHash(manageSuccessHash)}</div>
         )}
       </form>
 
@@ -599,6 +620,7 @@ const BindStep = ({
   const [transferAmountInput, setTransferAmountInput] = useState('');
   const [transferDurationInput, setTransferDurationInput] = useState('');
   const [transferError, setTransferError] = useState<string | null>(null);
+  const [transferSuccessHash, setTransferSuccessHash] = useState<`0x${string}` | null>(null);
 
   const {
     data: transferTxHash,
@@ -621,6 +643,13 @@ const BindStep = ({
   }, [transferWriteError]);
 
   useEffect(() => {
+    if (transferError) {
+      const timeout = setTimeout(() => setTransferError(null), 10_000);
+      return () => clearTimeout(timeout);
+    }
+  }, [transferError]);
+
+  useEffect(() => {
     if (isTransferConfirmed) {
       setSrcNameInput('');
       setDstNameInput('');
@@ -629,6 +658,19 @@ const BindStep = ({
       void refreshLockStatus();
     }
   }, [isTransferConfirmed, refreshLockStatus]);
+
+  useEffect(() => {
+    if (isTransferConfirmed && transferTxHash) {
+      setTransferSuccessHash(transferTxHash);
+    }
+  }, [isTransferConfirmed, transferTxHash]);
+
+  useEffect(() => {
+    if (transferSuccessHash) {
+      const timeout = setTimeout(() => setTransferSuccessHash(null), 10_000);
+      return () => clearTimeout(timeout);
+    }
+  }, [transferSuccessHash]);
 
   if (!connectComplete) {
     return <></>;
@@ -787,8 +829,8 @@ const BindStep = ({
           </label>
         </div>
         {transferError && <div className="inline-error">{transferError}</div>}
-        {isTransferConfirmed && transferTxHash && (
-          <div className="inline-success">Binding updated! Tx {shortHash(transferTxHash)}</div>
+        {transferSuccessHash && (
+          <div className="inline-success">Binding updated! Tx {shortHash(transferSuccessHash)}</div>
         )}
       </form>
     </section>
