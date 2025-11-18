@@ -406,6 +406,8 @@ const LockStep = ({
   const [pendingLock, setPendingLock] = useState<{ amount: bigint; duration: bigint } | null>(null);
 
   const durationParts = useMemo(() => inputsToDurationParts(durationInputs), [durationInputs]);
+  const lockedAmountWei = lockDetails?.amount_raw_wei ? BigInt(lockDetails.amount_raw_wei) : 0n;
+  const hasExistingLock = lockedAmountWei > 0n;
   const lockDurationSeconds = useMemo(() => durationPartsToSeconds(durationParts), [durationParts]);
   const hasAllowance = tokeregistryAllowance && tokeregistryAllowance.amount_raw_wei !== '0';
   const lockUnlockPreview = useMemo(() => {
@@ -578,7 +580,7 @@ const LockStep = ({
       return;
     }
 
-    if (!amountInput || Number(amountInput) <= 0) {
+    if ((!amountInput || Number(amountInput) <= 0) && !hasExistingLock) {
       pushManageError('Enter a positive HYPR amount.');
       return;
     }
@@ -596,7 +598,7 @@ const LockStep = ({
       return;
     }
 
-    const amountWei = parseEther(amountInput);
+    const amountWei = amountInput ? parseEther(amountInput) : 0n;
     const allowanceWei = tokeregistryAllowance ? BigInt(tokeregistryAllowance.amount_raw_wei) : 0n;
     const requiredAllowance = amountWei > allowanceWei ? amountWei - allowanceWei : 0n;
 
@@ -626,6 +628,24 @@ const LockStep = ({
   if (!connectComplete) {
     return <></>;
   }
+
+  const lockHeaderTitle = hasExistingLock ? 'Manage lock' : 'Create HYPR lock';
+  const lockHeaderSubtitle = hasExistingLock
+    ? 'Add HYPR to existing locked balance, or extend the current duration (enter 0 for HYPR amount).'
+    : 'Lock an amount of HYPR for a specified duration to use in bindings.';
+  const allowZeroAmount = hasExistingLock;
+  const amountProvided = amountInput !== '';
+  const amountValue = amountProvided ? Number(amountInput) : 0;
+  const lockButtonDisabled =
+    !walletConnected ||
+    isManagePending ||
+    isManageConfirming ||
+    isAllowancePending ||
+    isAllowanceConfirming ||
+    !amountProvided ||
+    (!allowZeroAmount && amountValue <= 0);
+  const showLockFormContent =
+    amountProvided && (amountValue > 0 || (allowZeroAmount && amountValue === 0));
 
   return (
     <section className="step-card lock-step">
@@ -673,7 +693,7 @@ const LockStep = ({
       )}
 
       <div className="lock-detail-panel">
-        {lockDetails ? (
+        {lockDetails && hasExistingLock ? (
           <>
             <div className="lock-detail">
               <span className="lock-detail-label">Locked amount</span>
@@ -701,14 +721,10 @@ const LockStep = ({
       <form className="lock-form" onSubmit={handleManageLock}>
         <div className="form-header">
           <div>
-            <h3>Manage lock</h3>
-            <p>Adjust locked HYPR amount and duration.</p>
+            <h3>{lockHeaderTitle}</h3>
+            <p>{lockHeaderSubtitle}</p>
           </div>
-          <button
-            type="submit"
-            className="secondary-button"
-            disabled={!walletConnected || isManagePending || isManageConfirming || isAllowancePending || isAllowanceConfirming}
-          >
+          <button type="submit" className="secondary-button" disabled={lockButtonDisabled}>
             {isManagePending || isManageConfirming || isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Lock'}
           </button>
         </div>
@@ -724,7 +740,7 @@ const LockStep = ({
             />
           </label>
         </div>
-        {amountInput && Number(amountInput) > 0 && (
+        {showLockFormContent && (
           <DurationInputs
             values={durationInputs}
             onChange={handleLockDurationInputChange}
