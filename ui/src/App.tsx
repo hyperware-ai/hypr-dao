@@ -82,6 +82,71 @@ const MIN_LOCK_DURATION_SECONDS = 4 * 7 * 24 * 60 * 60; // 4 weeks
 const MAX_LOCK_DURATION_SECONDS = 4 * 52 * 7 * 24 * 60 * 60; // ~4 years
 const ZERO_NAMEHASH = '0x0000000000000000000000000000000000000000000000000000000000000000' as const;
 
+const SECONDS_PER_MINUTE = 60;
+const SECONDS_PER_HOUR = 60 * SECONDS_PER_MINUTE;
+const SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR;
+const SECONDS_PER_WEEK = 7 * SECONDS_PER_DAY;
+const SECONDS_PER_MONTH = 30 * SECONDS_PER_DAY;
+const SECONDS_PER_YEAR = 365 * SECONDS_PER_DAY;
+
+type DurationField = 'years' | 'months' | 'weeks' | 'days' | 'hours' | 'minutes' | 'seconds';
+
+type DurationParts = Record<DurationField, number>;
+type DurationInputValues = Record<DurationField, string>;
+
+const BASE_DURATION_FIELDS: DurationField[] = ['years', 'months', 'weeks'];
+const PRECISION_DURATION_FIELDS: DurationField[] = ['days', 'hours', 'minutes', 'seconds'];
+
+const DURATION_LABELS: Record<DurationField, string> = {
+  years: 'Years',
+  months: 'Months',
+  weeks: 'Weeks',
+  days: 'Days',
+  hours: 'Hours',
+  minutes: 'Minutes',
+  seconds: 'Seconds',
+};
+
+const createDefaultDurationInputs = (): DurationInputValues => ({
+  years: '0',
+  months: '1',
+  weeks: '0',
+  days: '0',
+  hours: '0',
+  minutes: '0',
+  seconds: '0',
+});
+
+const inputsToDurationParts = (inputs: DurationInputValues): DurationParts => ({
+  years: parseDurationInputValue(inputs.years),
+  months: parseDurationInputValue(inputs.months),
+  weeks: parseDurationInputValue(inputs.weeks),
+  days: parseDurationInputValue(inputs.days),
+  hours: parseDurationInputValue(inputs.hours),
+  minutes: parseDurationInputValue(inputs.minutes),
+  seconds: parseDurationInputValue(inputs.seconds),
+});
+
+const durationPartsToSeconds = (parts: DurationParts): bigint => {
+  return (
+    BigInt(parts.years) * BigInt(SECONDS_PER_YEAR) +
+    BigInt(parts.months) * BigInt(SECONDS_PER_MONTH) +
+    BigInt(parts.weeks) * BigInt(SECONDS_PER_WEEK) +
+    BigInt(parts.days) * BigInt(SECONDS_PER_DAY) +
+    BigInt(parts.hours) * BigInt(SECONDS_PER_HOUR) +
+    BigInt(parts.minutes) * BigInt(SECONDS_PER_MINUTE) +
+    BigInt(parts.seconds)
+  );
+};
+
+const parseDurationInputValue = (value: string) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+  return Math.floor(parsed);
+};
+
 function App() {
   const [activeStep, setActiveStep] = useState<StepId>('lock');
   const [showLockModal, setShowLockModal] = useState(false);
@@ -310,11 +375,22 @@ const LockStep = ({
   onRequireLockInfo,
 }: LockStepProps) => {
   const [amountInput, setAmountInput] = useState('');
-  const [durationInput, setDurationInput] = useState('');
+  const [durationInputs, setDurationInputs] = useState<DurationInputValues>(createDefaultDurationInputs);
+  const [showLockPrecision, setShowLockPrecision] = useState(false);
   const [manageError, setManageError] = useState<string | null>(null);
   const [manageSuccessHash, setManageSuccessHash] = useState<`0x${string}` | null>(null);
 
   const [pendingLock, setPendingLock] = useState<{ amount: bigint; duration: bigint } | null>(null);
+
+  const durationParts = useMemo(() => inputsToDurationParts(durationInputs), [durationInputs]);
+  const lockDurationSeconds = useMemo(() => durationPartsToSeconds(durationParts), [durationParts]);
+  const lockUnlockPreview = useMemo(() => {
+    if (lockDurationSeconds <= 0n) {
+      return null;
+    }
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    return formatTimestamp(nowSeconds + Number(lockDurationSeconds));
+  }, [lockDurationSeconds]);
 
   const {
     data: allowanceTxHash,
@@ -367,7 +443,7 @@ const LockStep = ({
   useEffect(() => {
     if (isManageConfirmed) {
       setAmountInput('');
-      setDurationInput('');
+      setDurationInputs(createDefaultDurationInputs());
       setPendingLock(null);
       void refreshLockStatus();
     }
@@ -391,6 +467,19 @@ const LockStep = ({
       void triggerLock(pendingLock);
     }
   }, [isAllowanceConfirmed, pendingLock]);
+
+  const handleLockDurationInputChange = (field: DurationField, value: string) => {
+    setDurationInputs((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleLockDurationInputBlur = (field: DurationField) => {
+    setDurationInputs((prev) => {
+      if (prev[field] === '' || Number.isNaN(Number(prev[field]))) {
+        return { ...prev, [field]: '0' };
+      }
+      return prev;
+    });
+  };
 
   const triggerLock = async ({ amount, duration }: { amount: bigint; duration: bigint }) => {
     try {
@@ -425,17 +514,15 @@ const LockStep = ({
       return;
     }
 
-    if (!durationInput || Number(durationInput) <= 0) {
-      setManageError('Enter a positive duration in seconds.');
+    if (lockDurationSeconds <= 0n) {
+      setManageError('Enter a positive duration.');
       return;
     }
-
-    const durationSeconds = BigInt(durationInput);
-    if (durationSeconds < BigInt(MIN_LOCK_DURATION_SECONDS)) {
+    if (lockDurationSeconds < BigInt(MIN_LOCK_DURATION_SECONDS)) {
       setManageError(`Duration must be at least ${formatDurationSeconds(MIN_LOCK_DURATION_SECONDS)}.`);
       return;
     }
-    if (durationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
+    if (lockDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
       setManageError(`Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`);
       return;
     }
@@ -449,7 +536,7 @@ const LockStep = ({
         setManageError('Unable to resolve HYPR token address.');
         return;
       }
-      setPendingLock({ amount: amountWei, duration: durationSeconds });
+      setPendingLock({ amount: amountWei, duration: lockDurationSeconds });
       try {
         await writeApproveContract({
           address: hyprTokenAddress as `0x${string}`,
@@ -464,7 +551,7 @@ const LockStep = ({
       return;
     }
 
-    await triggerLock({ amount: amountWei, duration: durationSeconds });
+    await triggerLock({ amount: amountWei, duration: lockDurationSeconds });
   };
 
   if (!connectComplete) {
@@ -558,19 +645,16 @@ const LockStep = ({
               onChange={(event) => setAmountInput(event.target.value)}
             />
           </label>
-          <label className="input-field">
-            <span>Duration (seconds)</span>
-            <input
-              type="number"
-              min={MIN_LOCK_DURATION_SECONDS}
-              max={MAX_LOCK_DURATION_SECONDS}
-              step="1"
-              placeholder={MIN_LOCK_DURATION_SECONDS.toString()}
-              value={durationInput}
-              onChange={(event) => setDurationInput(event.target.value)}
-            />
-          </label>
         </div>
+        <DurationInputs
+          values={durationInputs}
+          onChange={handleLockDurationInputChange}
+          onBlurField={handleLockDurationInputBlur}
+          showPrecision={showLockPrecision}
+          onTogglePrecision={() => setShowLockPrecision((prev) => !prev)}
+          durationSeconds={lockDurationSeconds}
+          unlockPreview={lockUnlockPreview}
+        />
         {manageError && <div className="inline-error">{manageError}</div>}
         {manageSuccessHash && (
           <div className="inline-success">Lock updated! Tx {shortHash(manageSuccessHash)}</div>
@@ -618,7 +702,10 @@ const BindStep = ({
   const [srcNameInput, setSrcNameInput] = useState('');
   const [dstNameInput, setDstNameInput] = useState('');
   const [transferAmountInput, setTransferAmountInput] = useState('');
-  const [transferDurationInput, setTransferDurationInput] = useState('');
+  const [transferDurationInputs, setTransferDurationInputs] = useState<DurationInputValues>(
+    createDefaultDurationInputs,
+  );
+  const [showTransferPrecision, setShowTransferPrecision] = useState(false);
   const [transferError, setTransferError] = useState<string | null>(null);
   const [transferSuccessHash, setTransferSuccessHash] = useState<`0x${string}` | null>(null);
 
@@ -649,12 +736,41 @@ const BindStep = ({
     }
   }, [transferError]);
 
+  const transferDurationParts = useMemo(
+    () => inputsToDurationParts(transferDurationInputs),
+    [transferDurationInputs],
+  );
+  const transferDurationSeconds = useMemo(
+    () => durationPartsToSeconds(transferDurationParts),
+    [transferDurationParts],
+  );
+  const transferUnlockPreview = useMemo(() => {
+    if (transferDurationSeconds <= 0n) {
+      return null;
+    }
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    return formatTimestamp(nowSeconds + Number(transferDurationSeconds));
+  }, [transferDurationSeconds]);
+
+  const handleTransferDurationInputChange = (field: DurationField, value: string) => {
+    setTransferDurationInputs((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleTransferDurationInputBlur = (field: DurationField) => {
+    setTransferDurationInputs((prev) => {
+      if (prev[field] === '' || Number.isNaN(Number(prev[field]))) {
+        return { ...prev, [field]: '0' };
+      }
+      return prev;
+    });
+  };
+
   useEffect(() => {
     if (isTransferConfirmed) {
       setSrcNameInput('');
       setDstNameInput('');
       setTransferAmountInput('');
-      setTransferDurationInput('');
+      setTransferDurationInputs(createDefaultDurationInputs());
       void refreshLockStatus();
     }
   }, [isTransferConfirmed, refreshLockStatus]);
@@ -704,12 +820,18 @@ const BindStep = ({
       }
     }
 
-    if (!transferDurationInput || Number(transferDurationInput) < MIN_LOCK_DURATION_SECONDS) {
+    if (transferDurationSeconds <= 0n) {
+      setTransferError('Enter a positive duration.');
+      return;
+    }
+    if (transferDurationSeconds < BigInt(MIN_LOCK_DURATION_SECONDS)) {
       setTransferError(`Duration must be at least ${formatDurationSeconds(MIN_LOCK_DURATION_SECONDS)}.`);
       return;
     }
-
-    const durationSeconds = BigInt(transferDurationInput);
+    if (transferDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
+      setTransferError(`Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`);
+      return;
+    }
 
     try {
       const srcHash = resolveNamehash(srcNameInput);
@@ -723,7 +845,7 @@ const BindStep = ({
         address: targetRegistryAddress,
         abi: transferRegistrationAbi,
         functionName: 'transferRegistration',
-        args: [srcHash, dstHash, maxAmountWei, durationSeconds],
+        args: [srcHash, dstHash, maxAmountWei, transferDurationSeconds],
       });
     } catch (error) {
       setTransferError(getErrorMessage(error));
@@ -814,20 +936,16 @@ const BindStep = ({
               required
             />
           </label>
-          <label className="input-field">
-            <span>Duration (seconds)</span>
-            <input
-              type="number"
-              min={MIN_LOCK_DURATION_SECONDS}
-              max={MAX_LOCK_DURATION_SECONDS}
-              step="1"
-              placeholder={MIN_LOCK_DURATION_SECONDS.toString()}
-              value={transferDurationInput}
-              onChange={(event) => setTransferDurationInput(event.target.value)}
-              required
-            />
-          </label>
         </div>
+        <DurationInputs
+          values={transferDurationInputs}
+          onChange={handleTransferDurationInputChange}
+          onBlurField={handleTransferDurationInputBlur}
+          showPrecision={showTransferPrecision}
+          onTogglePrecision={() => setShowTransferPrecision((prev) => !prev)}
+          durationSeconds={transferDurationSeconds}
+          unlockPreview={transferUnlockPreview}
+        />
         {transferError && <div className="inline-error">{transferError}</div>}
         {transferSuccessHash && (
           <div className="inline-success">Binding updated! Tx {shortHash(transferSuccessHash)}</div>
@@ -836,6 +954,16 @@ const BindStep = ({
     </section>
   );
 };
+
+interface DurationInputsProps {
+  values: DurationInputValues;
+  onChange: (field: DurationField, value: string) => void;
+  onBlurField: (field: DurationField) => void;
+  showPrecision: boolean;
+  onTogglePrecision: () => void;
+  durationSeconds: bigint;
+  unlockPreview: string | null;
+}
 
 interface BottomTabsProps {
   steps: StepConfig[];
@@ -872,6 +1000,52 @@ const iconGlyph: Record<StepIcon, string> = {
   check: '✔',
   lock: '🔒',
   chain: '⛓',
+};
+
+const DurationInputs = ({
+  values,
+  onChange,
+  onBlurField,
+  showPrecision,
+  onTogglePrecision,
+  durationSeconds,
+  unlockPreview,
+}: DurationInputsProps) => {
+  const renderField = (field: DurationField) => (
+    <label className="input-field" key={field}>
+      <span>{DURATION_LABELS[field]}</span>
+      <input
+        type="number"
+        min={0}
+        step={1}
+        value={values[field] ?? ''}
+        onChange={(event) => onChange(field, event.target.value)}
+        onBlur={() => onBlurField(field)}
+      />
+    </label>
+  );
+
+  const durationLabel =
+    durationSeconds > 0n ? formatDurationSeconds(Number(durationSeconds)) : '0 seconds';
+  const unlockText = unlockPreview ?? 'Set a duration to preview end time';
+
+  return (
+    <div className="duration-section">
+      <div className="duration-grid">{BASE_DURATION_FIELDS.map((field) => renderField(field))}</div>
+      {showPrecision && (
+        <div className="duration-grid">
+          {PRECISION_DURATION_FIELDS.map((field) => renderField(field))}
+        </div>
+      )}
+      <button type="button" className="link-button" onClick={onTogglePrecision}>
+        {showPrecision ? 'Hide optional precision' : 'Optional precision duration'}
+      </button>
+      <div className="duration-summary">
+        <span>Unlock preview: {unlockText}</span>
+        <span>Duration total: {durationLabel}</span>
+      </div>
+    </div>
+  );
 };
 
 interface TopStatusBarProps {
