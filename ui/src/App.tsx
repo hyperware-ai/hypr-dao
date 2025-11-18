@@ -1,4 +1,6 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useWaitForTransactionReceipt, useWriteContract } from 'wagmi';
 import { base, anvil } from 'wagmi/chains';
@@ -95,6 +97,7 @@ const SECONDS_PER_MONTH = 30 * SECONDS_PER_DAY;
 const SECONDS_PER_YEAR = 365 * SECONDS_PER_DAY;
 
 type DurationField = 'years' | 'months' | 'weeks' | 'days' | 'hours' | 'minutes' | 'seconds';
+type DurationMode = 'duration' | 'end-date';
 
 type DurationParts = Record<DurationField, number>;
 type DurationInputValues = Record<DurationField, string>;
@@ -150,6 +153,24 @@ const parseDurationInputValue = (value: string) => {
     return 0;
   }
   return Math.floor(parsed);
+};
+
+const calculateRequiredAdditionalDuration = (
+  existingAmount: bigint,
+  existingDuration: bigint,
+  additionalAmount: bigint,
+  desiredDuration: bigint,
+): bigint | null => {
+  if (additionalAmount === 0n) {
+    return null;
+  }
+  const totalAmount = existingAmount + additionalAmount;
+  const desiredWeighted = desiredDuration * totalAmount;
+  const existingWeighted = existingAmount * existingDuration;
+  if (desiredWeighted < existingWeighted) {
+    return null;
+  }
+  return (desiredWeighted - existingWeighted) / additionalAmount;
 };
 
 function App() {
@@ -247,23 +268,15 @@ function App() {
     <div className="app">
       <div className="phone-shell">
         <div className="phone-frame">
-          <TopStatusBar
-            hyperConnected={isConnected}
-            walletConnected={walletConnected}
-            walletAddress={address}
-          />
+          <TopStatusBar />
 
           <div className="phone-body">
-            <header className="app-header">
-              <h1 className="app-title">🔐 Lock &amp; Bind</h1>
-              <p className="app-subtitle">HYPR registry companion</p>
-              {showHyprRequiredNotice && (
-                <div className="hypr-required-card">
-                  <h3>HYPR required</h3>
-                  <p>This account must possess a HYPR balance to use this application.</p>
-                </div>
-              )}
-            </header>
+            {showHyprRequiredNotice && (
+              <div className="hypr-required-card">
+                <h3>HYPR required</h3>
+                <p>This account must possess a HYPR balance to use this application.</p>
+              </div>
+            )}
 
             {showContent && (
               <>
@@ -408,6 +421,8 @@ const LockStep = ({
 }: LockStepProps) => {
   const [amountInput, setAmountInput] = useState('');
   const [durationInputs, setDurationInputs] = useState<DurationInputValues>(createDefaultDurationInputs);
+  const [lockDurationMode, setLockDurationMode] = useState<DurationMode>('duration');
+  const [lockEndDateInput, setLockEndDateInput] = useState<Date | null>(null);
   const [showLockPrecision, setShowLockPrecision] = useState(false);
   const [manageError, setManageError] = useState<BannerMessage | null>(null);
   const [manageSuccessHash, setManageSuccessHash] = useState<`0x${string}` | null>(null);
@@ -416,19 +431,42 @@ const LockStep = ({
   const manageSuccessRef = useRef<HTMLDivElement | null>(null);
 
   const [pendingLock, setPendingLock] = useState<{ amount: bigint; duration: bigint } | null>(null);
+  const nowSecondsRef = useRef(Math.floor(Date.now() / 1000));
+  const nowSeconds = nowSecondsRef.current;
 
   const durationParts = useMemo(() => inputsToDurationParts(durationInputs), [durationInputs]);
   const lockedAmountWei = lockDetails?.amount_raw_wei ? BigInt(lockDetails.amount_raw_wei) : 0n;
   const hasExistingLock = lockedAmountWei > 0n;
-  const lockDurationSeconds = useMemo(() => durationPartsToSeconds(durationParts), [durationParts]);
+  const lockDurationSecondsFromInputs = useMemo(
+    () => durationPartsToSeconds(durationParts),
+    [durationParts],
+  );
   const hasAllowance = tokeregistryAllowance && tokeregistryAllowance.amount_raw_wei !== '0';
+  const lockEndDateMin = useMemo(
+    () => new Date((nowSeconds + MIN_LOCK_DURATION_SECONDS) * 1000),
+    [nowSeconds],
+  );
+  const lockEndDateMax = useMemo(
+    () => new Date((nowSeconds + MAX_LOCK_DURATION_SECONDS) * 1000),
+    [nowSeconds],
+  );
+  useEffect(() => {
+    if (lockDurationMode === 'end-date' && !lockEndDateInput) {
+      setLockEndDateInput(lockEndDateMin);
+    }
+  }, [lockDurationMode, lockEndDateInput, lockEndDateMin]);
+  const lockEndDateDurationSeconds = secondsUntilDate(lockEndDateInput, nowSeconds);
+  const selectedLockDurationSeconds =
+    lockDurationMode === 'duration'
+      ? lockDurationSecondsFromInputs
+      : lockEndDateDurationSeconds ?? 0n;
   const lockUnlockPreview = useMemo(() => {
-    if (lockDurationSeconds <= 0n) {
+    if (selectedLockDurationSeconds <= 0n) {
       return null;
     }
     const nowSeconds = Math.floor(Date.now() / 1000);
-    return formatTimestamp(nowSeconds + Number(lockDurationSeconds));
-  }, [lockDurationSeconds]);
+    return formatTimestamp(nowSeconds + Number(selectedLockDurationSeconds));
+  }, [selectedLockDurationSeconds]);
 
   const {
     data: allowanceTxHash,
@@ -488,6 +526,8 @@ const LockStep = ({
     if (isManageConfirmed) {
       setAmountInput('');
       setDurationInputs(createDefaultDurationInputs());
+      setLockDurationMode('duration');
+      setLockEndDateInput(null);
       setPendingLock(null);
       void refreshLockStatus();
     }
@@ -597,29 +637,54 @@ const LockStep = ({
       return;
     }
 
-    if (lockDurationSeconds <= 0n) {
+    if (lockDurationMode === 'end-date') {
+      if (!lockEndDateInput) {
+        pushManageError('Select an end date.');
+        return;
+      }
+      if (!lockEndDateDurationSeconds) {
+        pushManageError('Select an end date within the allowed range.');
+        return;
+      }
+    }
+
+    if (selectedLockDurationSeconds <= 0n) {
       pushManageError('Enter a positive duration.');
       return;
     }
-    if (lockDurationSeconds < BigInt(MIN_LOCK_DURATION_SECONDS)) {
+    if (selectedLockDurationSeconds < BigInt(MIN_LOCK_DURATION_SECONDS)) {
       pushManageError(`Duration must be at least ${formatDurationSeconds(MIN_LOCK_DURATION_SECONDS)}.`);
       return;
     }
-    if (lockDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
+    if (selectedLockDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
       pushManageError(`Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`);
       return;
     }
 
-    const amountWei = amountInput ? parseEther(amountInput) : 0n;
+    const amountWei = additionalAmountWei;
     const allowanceWei = tokeregistryAllowance ? BigInt(tokeregistryAllowance.amount_raw_wei) : 0n;
     const requiredAllowance = amountWei > allowanceWei ? amountWei - allowanceWei : 0n;
+    let submittedDurationSeconds = selectedLockDurationSeconds;
+    if (hasExistingLock && amountWei > 0n) {
+      const requiredDuration = calculateRequiredAdditionalDuration(
+        existingAmountWei,
+        existingDurationSeconds,
+        amountWei,
+        selectedLockDurationSeconds,
+      );
+      if (!requiredDuration) {
+        pushManageError('Unable to compute required duration. Adjust amount or duration.');
+        return;
+      }
+      submittedDurationSeconds = requiredDuration;
+    }
 
     if (requiredAllowance > 0n) {
       if (!hyprTokenAddress) {
         pushManageError('Unable to resolve HYPR token address.');
         return;
       }
-      setPendingLock({ amount: amountWei, duration: lockDurationSeconds });
+      setPendingLock({ amount: amountWei, duration: submittedDurationSeconds });
       try {
         await writeApproveContract({
           address: hyprTokenAddress as `0x${string}`,
@@ -634,7 +699,7 @@ const LockStep = ({
       return;
     }
 
-    await triggerLock({ amount: amountWei, duration: lockDurationSeconds });
+    await triggerLock({ amount: amountWei, duration: submittedDurationSeconds });
   };
 
   if (!connectComplete) {
@@ -648,6 +713,25 @@ const LockStep = ({
   const allowZeroAmount = hasExistingLock;
   const amountProvided = amountInput !== '';
   const amountValue = amountProvided ? Number(amountInput) : 0;
+  const additionalAmountWei = useMemo(() => {
+    if (!amountProvided) {
+      return 0n;
+    }
+    try {
+      return parseEther(amountInput || '0');
+    } catch {
+      return 0n;
+    }
+  }, [amountInput, amountProvided]);
+  const existingAmountWei =
+    lockDetails && hasExistingLock ? BigInt(lockDetails.amount_raw_wei) : 0n;
+  const existingDurationSeconds =
+    lockDetails && hasExistingLock ? BigInt(lockDetails.remaining_seconds ?? 0) : 0n;
+  const hasValidEndDate = lockDurationMode === 'duration' ? true : Boolean(lockEndDateDurationSeconds);
+  const zeroAmountExtendingOnly =
+    hasExistingLock && additionalAmountWei === 0n && existingDurationSeconds > 0n;
+  const durationLessThanExisting =
+    zeroAmountExtendingOnly && selectedLockDurationSeconds < existingDurationSeconds;
   const lockButtonDisabled =
     !walletConnected ||
     isManagePending ||
@@ -655,18 +739,35 @@ const LockStep = ({
     isAllowancePending ||
     isAllowanceConfirming ||
     !amountProvided ||
-    (!allowZeroAmount && amountValue <= 0);
+    (!allowZeroAmount && amountValue <= 0) ||
+    !hasValidEndDate ||
+    durationLessThanExisting;
   const showLockFormContent =
     amountProvided && (amountValue > 0 || (allowZeroAmount && amountValue === 0));
+  const requiredDurationSeconds = useMemo(() => {
+    if (!hasExistingLock || additionalAmountWei <= 0n) {
+      return selectedLockDurationSeconds;
+    }
+    return (
+      calculateRequiredAdditionalDuration(
+        existingAmountWei,
+        existingDurationSeconds,
+        additionalAmountWei,
+        selectedLockDurationSeconds,
+      ) ?? selectedLockDurationSeconds
+    );
+  }, [
+    additionalAmountWei,
+    existingAmountWei,
+    existingDurationSeconds,
+    hasExistingLock,
+    selectedLockDurationSeconds,
+  ]);
 
   return (
     <section className="step-card lock-step">
       <div className="lock-grid">
-        <LockMetric
-          label="HYPR owned"
-          value={hyprOwned?.amount_formatted_hypr ?? 'Loading…'}
-          subValue={hyprOwned?.amount_raw_wei ? `${hyprOwned.amount_raw_wei} wei` : undefined}
-        />
+        <LockMetric label="HYPR owned" value={hyprOwned?.amount_formatted_hypr ?? 'Loading…'} />
       </div>
 
       {hasAllowance && tokeregistryAllowance && (
@@ -675,7 +776,6 @@ const LockStep = ({
             <LockMetric
               label="Previously allowed"
               value={tokeregistryAllowance.amount_formatted_hypr}
-              subValue={`${tokeregistryAllowance.amount_raw_wei} wei`}
             />
             <button
               type="button"
@@ -692,10 +792,9 @@ const LockStep = ({
       <div className="lock-grid">
         {lockDetails && hasExistingLock ? (
           <div className="lock-detail-card">
-            <div className="lock-card">
+            <div className="lock-card lock-detail-stat">
               <span className="lock-card-label">Locked amount</span>
               <span className="lock-card-value">{lockDetails.amount_formatted_hypr}</span>
-              <span className="lock-card-sub">{lockDetails.amount_raw_wei} wei</span>
             </div>
             <div className="lock-card">
               <span className="lock-card-label">Unlock timestamp</span>
@@ -741,8 +840,24 @@ const LockStep = ({
             onBlurField={handleLockDurationInputBlur}
             showPrecision={showLockPrecision}
             onTogglePrecision={() => setShowLockPrecision((prev) => !prev)}
-            durationSeconds={lockDurationSeconds}
+            durationSeconds={selectedLockDurationSeconds}
             unlockPreview={lockUnlockPreview}
+            computedDurationLabel={
+              hasExistingLock ? formatSeconds(Number(selectedLockDurationSeconds)) : undefined
+            }
+            computedUnlockLabel={
+              hasExistingLock ? lockUnlockPreview ?? undefined : undefined
+            }
+            resolvedDurationLabel={
+              hasExistingLock ? formatSeconds(Number(requiredDurationSeconds)) : undefined
+            }
+            mode={lockDurationMode}
+            onModeChange={setLockDurationMode}
+            endDateValue={lockEndDateInput}
+            onEndDateChange={setLockEndDateInput}
+            endDateMin={lockEndDateMin}
+            endDateMax={lockEndDateMax}
+            showUnlockPreview={!hasExistingLock}
           />
         )}
         <div className="form-actions">
@@ -806,6 +921,8 @@ const BindStep = ({
   const [transferDurationInputs, setTransferDurationInputs] = useState<DurationInputValues>(
     createDefaultDurationInputs,
   );
+  const [transferDurationMode, setTransferDurationMode] = useState<DurationMode>('duration');
+  const [transferEndDateInput, setTransferEndDateInput] = useState<Date | null>(null);
   const [showTransferPrecision, setShowTransferPrecision] = useState(false);
   const [transferError, setTransferError] = useState<BannerMessage | null>(null);
   const [transferSuccessHash, setTransferSuccessHash] = useState<`0x${string}` | null>(null);
@@ -850,17 +967,38 @@ const BindStep = ({
     () => inputsToDurationParts(transferDurationInputs),
     [transferDurationInputs],
   );
-  const transferDurationSeconds = useMemo(
+  const transferDurationSecondsFromInputs = useMemo(
     () => durationPartsToSeconds(transferDurationParts),
     [transferDurationParts],
   );
+  const transferNowSecondsRef = useRef(Math.floor(Date.now() / 1000));
+  const transferNowSeconds = transferNowSecondsRef.current;
+  const transferEndDateMin = useMemo(
+    () => new Date((transferNowSeconds + MIN_LOCK_DURATION_SECONDS) * 1000),
+    [transferNowSeconds],
+  );
+  const transferEndDateMax = useMemo(
+    () => new Date((transferNowSeconds + MAX_LOCK_DURATION_SECONDS) * 1000),
+    [transferNowSeconds],
+  );
+  useEffect(() => {
+    if (transferDurationMode === 'end-date' && !transferEndDateInput) {
+      setTransferEndDateInput(transferEndDateMin);
+    }
+  }, [transferDurationMode, transferEndDateInput, transferEndDateMin]);
+  const transferEndDateDurationSeconds = secondsUntilDate(transferEndDateInput, transferNowSeconds);
+  const selectedTransferDurationSeconds =
+    transferDurationMode === 'duration'
+      ? transferDurationSecondsFromInputs
+      : transferEndDateDurationSeconds ?? 0n;
+  const hasTransferValidEndDate =
+    transferDurationMode === 'duration' ? true : Boolean(transferEndDateDurationSeconds);
   const transferUnlockPreview = useMemo(() => {
-    if (transferDurationSeconds <= 0n) {
+    if (selectedTransferDurationSeconds <= 0n) {
       return null;
     }
-    const nowSeconds = Math.floor(Date.now() / 1000);
-    return formatTimestamp(nowSeconds + Number(transferDurationSeconds));
-  }, [transferDurationSeconds]);
+    return formatTimestamp(transferNowSeconds + Number(selectedTransferDurationSeconds));
+  }, [selectedTransferDurationSeconds, transferNowSeconds]);
 
   const pushTransferError = (message: string) => {
     transferErrorIdRef.current += 1;
@@ -886,6 +1024,8 @@ const BindStep = ({
       setDstNameInput('');
       setTransferAmountInput('');
       setTransferDurationInputs(createDefaultDurationInputs());
+      setTransferDurationMode('duration');
+      setTransferEndDateInput(null);
       void refreshLockStatus();
     }
   }, [isTransferConfirmed, refreshLockStatus]);
@@ -941,15 +1081,26 @@ const BindStep = ({
       }
     }
 
-    if (transferDurationSeconds <= 0n) {
+    if (transferDurationMode === 'end-date') {
+      if (!transferEndDateInput) {
+        pushTransferError('Select an end date.');
+        return;
+      }
+      if (!transferEndDateDurationSeconds) {
+        pushTransferError('Select an end date within the allowed range.');
+        return;
+      }
+    }
+
+    if (selectedTransferDurationSeconds <= 0n) {
       pushTransferError('Enter a positive duration.');
       return;
     }
-    if (transferDurationSeconds < BigInt(MIN_LOCK_DURATION_SECONDS)) {
+    if (selectedTransferDurationSeconds < BigInt(MIN_LOCK_DURATION_SECONDS)) {
       pushTransferError(`Duration must be at least ${formatDurationSeconds(MIN_LOCK_DURATION_SECONDS)}.`);
       return;
     }
-    if (transferDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
+    if (selectedTransferDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
       pushTransferError(`Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`);
       return;
     }
@@ -966,7 +1117,7 @@ const BindStep = ({
         address: targetRegistryAddress,
         abi: transferRegistrationAbi,
         functionName: 'transferRegistration',
-        args: [srcHash, dstHash, maxAmountWei, transferDurationSeconds],
+        args: [srcHash, dstHash, maxAmountWei, selectedTransferDurationSeconds],
       });
     } catch (error) {
         pushTransferError(getErrorMessage(error));
@@ -989,7 +1140,6 @@ const BindStep = ({
         <LockMetric
           label="HYPR available to bind"
           value={availableToBind?.amount_formatted_hypr ?? '0 HYPR'}
-          subValue={availableToBind?.amount_raw_wei ? `${availableToBind.amount_raw_wei} wei` : undefined}
         />
         <LockMetric label="Active bindings" value={bindings.length.toString()} />
       </div>
@@ -1020,7 +1170,9 @@ const BindStep = ({
           <button
             type="submit"
             className="secondary-button"
-            disabled={!walletConnected || isTransferPending || isTransferConfirming}
+            disabled={
+              !walletConnected || isTransferPending || isTransferConfirming || !hasTransferValidEndDate
+            }
           >
             {isTransferPending || isTransferConfirming ? <span className="spinner" /> : 'Bind'}
           </button>
@@ -1064,8 +1216,14 @@ const BindStep = ({
             onBlurField={handleTransferDurationInputBlur}
             showPrecision={showTransferPrecision}
             onTogglePrecision={() => setShowTransferPrecision((prev) => !prev)}
-            durationSeconds={transferDurationSeconds}
+            durationSeconds={selectedTransferDurationSeconds}
             unlockPreview={transferUnlockPreview}
+            mode={transferDurationMode}
+            onModeChange={setTransferDurationMode}
+            endDateValue={transferEndDateInput}
+            onEndDateChange={setTransferEndDateInput}
+            endDateMin={transferEndDateMin}
+            endDateMax={transferEndDateMax}
           />
         )}
         {transferError && (
@@ -1091,6 +1249,16 @@ interface DurationInputsProps {
   onTogglePrecision: () => void;
   durationSeconds: bigint;
   unlockPreview: string | null;
+  computedDurationLabel?: string | null;
+  computedUnlockLabel?: string | null;
+  resolvedDurationLabel?: string | null;
+  mode: DurationMode;
+  onModeChange: (mode: DurationMode) => void;
+  endDateValue: Date | null;
+  onEndDateChange: (value: Date | null) => void;
+  endDateMin?: Date;
+  endDateMax?: Date;
+  showUnlockPreview?: boolean;
 }
 
 interface BottomTabsProps {
@@ -1138,7 +1306,33 @@ const DurationInputs = ({
   onTogglePrecision,
   durationSeconds,
   unlockPreview,
+  computedDurationLabel,
+  computedUnlockLabel,
+  resolvedDurationLabel,
+  mode,
+  onModeChange,
+  endDateValue,
+  onEndDateChange,
+  endDateMin,
+  endDateMax,
+  showUnlockPreview = true,
 }: DurationInputsProps) => {
+  const SecondsTimeInput = ({
+    value,
+    onChange,
+  }: {
+    value?: string;
+    onChange?: (event: ChangeEvent<HTMLInputElement>) => void;
+  }) => (
+    <input
+      type="time"
+      step="1"
+      value={value ?? ''}
+      onChange={(event) => onChange?.(event)}
+      className="date-picker-time-input"
+    />
+  );
+
   const renderField = (field: DurationField) => (
     <label className="input-field" key={field}>
       <span>{DURATION_LABELS[field]}</span>
@@ -1159,54 +1353,71 @@ const DurationInputs = ({
 
   return (
     <div className="duration-section">
-      <div className="duration-grid">{BASE_DURATION_FIELDS.map((field) => renderField(field))}</div>
-      {showPrecision && (
-        <div className="duration-grid">
-          {PRECISION_DURATION_FIELDS.map((field) => renderField(field))}
-        </div>
+      <div className="duration-mode-toggle">
+        <button
+          type="button"
+          className={mode === 'duration' ? 'active' : ''}
+          onClick={() => onModeChange('duration')}
+        >
+          Duration
+        </button>
+        <button
+          type="button"
+          className={mode === 'end-date' ? 'active' : ''}
+          onClick={() => onModeChange('end-date')}
+        >
+          End date
+        </button>
+      </div>
+      {mode === 'duration' ? (
+        <>
+          <div className="duration-grid">{BASE_DURATION_FIELDS.map((field) => renderField(field))}</div>
+          {showPrecision && (
+            <div className="duration-grid">
+              {PRECISION_DURATION_FIELDS.map((field) => renderField(field))}
+            </div>
+          )}
+          <button type="button" className="link-button" onClick={onTogglePrecision}>
+            {showPrecision ? 'Hide optional precision' : 'Optional precision duration'}
+          </button>
+        </>
+      ) : (
+        <label className="input-field">
+          <span>Select end date</span>
+          <DatePicker
+            selected={endDateValue}
+            onChange={onEndDateChange}
+            showTimeInput
+            timeInputLabel="Time"
+            customTimeInput={<SecondsTimeInput />}
+            dateFormat="yyyy-MM-dd HH:mm:ss"
+            minDate={endDateMin}
+            maxDate={endDateMax}
+            className="date-picker-input"
+            calendarClassName="date-picker-calendar"
+            popperClassName="date-picker-popper"
+          />
+        </label>
       )}
-      <button type="button" className="link-button" onClick={onTogglePrecision}>
-        {showPrecision ? 'Hide optional precision' : 'Optional precision duration'}
-      </button>
       <div className="duration-summary">
-        <span>Unlock preview: {unlockText}</span>
-        <span>Duration total: {durationLabel}</span>
+        {showUnlockPreview && !computedUnlockLabel && <span>Unlock preview: {unlockText}</span>}
+        {!computedDurationLabel && <span>Duration total: {durationLabel}</span>}
+        {computedUnlockLabel && <span>Requested final unlock: {computedUnlockLabel}</span>}
+        {computedDurationLabel && <span>Requested final duration: {computedDurationLabel}</span>}
+        {resolvedDurationLabel && (
+          <span>(Duration to be supplied to tx): {resolvedDurationLabel}</span>
+        )}
       </div>
     </div>
   );
 };
 
-interface TopStatusBarProps {
-  hyperConnected: boolean;
-  walletConnected: boolean;
-  walletAddress?: `0x${string}`;
-}
+const TopStatusBar = () => (
+  <div className="top-banner">
+    <ConnectButton chainStatus="icon" showBalance={false} />
+  </div>
+);
 
-const TopStatusBar = ({ hyperConnected, walletConnected, walletAddress }: TopStatusBarProps) => {
-  const connectedState = walletConnected && walletAddress;
-  return (
-    <div className={`top-banner ${connectedState ? 'banner-ready' : 'banner-warning'}`}>
-      <div className="banner-main">
-        <span className="banner-title">
-          {connectedState ? 'Provider connected' : 'Connect your wallet'}
-        </span>
-        <span className="banner-subtitle">
-          {connectedState
-            ? shortenAddress(walletAddress)
-            : 'Approvals and locks require a connected provider.'}
-        </span>
-      </div>
-      <div className="banner-actions">
-        <span className={`banner-chip ${hyperConnected ? 'online' : 'offline'}`}>
-          {hyperConnected ? 'Hyperware online' : 'Hyperware offline'}
-        </span>
-        <ConnectButton chainStatus="icon" showBalance={false} />
-      </div>
-    </div>
-  );
-};
-
-const shortenAddress = (address: `0x${string}`) => `${address.slice(0, 6)}…${address.slice(-4)}`;
 const shortHash = (hash: `0x${string}`) => `${hash.slice(0, 8)}…${hash.slice(-6)}`;
 
 const formatTimestamp = (seconds: number) => {
@@ -1263,6 +1474,17 @@ const formatDurationSeconds = (seconds: number) => {
     }
   }
   return `${seconds.toLocaleString()} seconds`;
+};
+
+const secondsUntilDate = (target: Date | null, baseSeconds: number) => {
+  if (!target) {
+    return null;
+  }
+  const diffSeconds = Math.floor(target.getTime() / 1000) - baseSeconds;
+  if (diffSeconds <= 0) {
+    return null;
+  }
+  return BigInt(diffSeconds);
 };
 
 const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Action failed.');

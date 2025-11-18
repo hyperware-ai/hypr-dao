@@ -1,20 +1,23 @@
 {
   "name": "lock-and-bind-ui",
-  "private": true,
   "version": "0.1.0",
+  "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
     "build": "tsc && vite build",
     "build:copy": "npm run build && rm -rf ../pkg/ui && cp -r dist ../pkg/ui",
+    "dev": "vite",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview"
   },
   "dependencies": {
     "@rainbow-me/rainbowkit": "^2.1.6",
     "@tanstack/react-query": "^5.45.1",
+    "@types/react-datepicker": "^6.2.0",
     "buffer": "^6.0.3",
+    "date-fns": "^4.1.0",
     "react": "^18.3.1",
+    "react-datepicker": "^4.25.0",
     "react-dom": "^18.3.1",
     "viem": "^2.23.2",
     "wagmi": "^2.12.5",

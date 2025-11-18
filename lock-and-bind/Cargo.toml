@@ -12,7 +12,7 @@ rev = "aaf7e02"
 [dependencies.hyperware_process_lib]
 features = ["hyperapp"]
 git = "https://github.com/hyperware-ai/process_lib.git"
-rev = "77e5014ddd0baf53f69c0a7f21b1100f9d20e2c8"
+rev = "48b6715e6c663b74b58e56815fc74139e9c8c202"
 
 [dependencies.lock_and_bind_caller_utils]
 optional = true
