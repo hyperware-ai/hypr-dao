@@ -275,7 +275,19 @@ function App() {
                 )}
 
                 <div className="step-info">
-                  <h2 className="step-heading">{activeStepTitle}</h2>
+                  <div className="step-heading-row">
+                    <h2 className="step-heading">{activeStepTitle}</h2>
+                    {activeStep === 'lock' && (
+                      <button
+                        type="button"
+                        className="refresh-inline-button"
+                        disabled={isLoading}
+                        onClick={refreshLockStatus}
+                      >
+                        {isLoading ? <span className="spinner" /> : 'Refresh values'}
+                      </button>
+                    )}
+                  </div>
                   <p className="step-description">{stepDescription}</p>
                 </div>
 
@@ -649,21 +661,6 @@ const LockStep = ({
 
   return (
     <section className="step-card lock-step">
-      <div className="lock-header">
-        <div>
-          <h2>Lock overview</h2>
-          <p className="lock-subtitle">Review locked HYPR and confirm you meet the staking requirements.</p>
-        </div>
-        <button
-          type="button"
-          className="secondary-button"
-          disabled={isLoading}
-          onClick={refreshLockStatus}
-        >
-          {isLoading ? <span className="spinner" /> : 'Refresh'}
-        </button>
-      </div>
-
       <div className="lock-grid">
         <LockMetric
           label="HYPR owned"
@@ -692,24 +689,24 @@ const LockStep = ({
         </div>
       )}
 
-      <div className="lock-detail-panel">
+      <div className="lock-grid">
         {lockDetails && hasExistingLock ? (
-          <>
-            <div className="lock-detail">
-              <span className="lock-detail-label">Locked amount</span>
-              <span className="lock-detail-value">{lockDetails.amount_formatted_hypr}</span>
-              <span className="lock-detail-sub">{lockDetails.amount_raw_wei} wei</span>
+          <div className="lock-detail-card">
+            <div className="lock-card">
+              <span className="lock-card-label">Locked amount</span>
+              <span className="lock-card-value">{lockDetails.amount_formatted_hypr}</span>
+              <span className="lock-card-sub">{lockDetails.amount_raw_wei} wei</span>
             </div>
-            <div className="lock-detail">
-              <span className="lock-detail-label">Unlock timestamp</span>
-              <span className="lock-detail-value">{formatTimestamp(lockDetails.unlock_timestamp)}</span>
-              <span className="lock-detail-sub">
+            <div className="lock-card">
+              <span className="lock-card-label">Unlock timestamp</span>
+              <span className="lock-card-value">{formatTimestamp(lockDetails.unlock_timestamp)}</span>
+              <span className="lock-card-sub">
                 {lockDetails.remaining_seconds === Number.MAX_SAFE_INTEGER
                   ? 'Unknown remaining time'
                   : `${formatSeconds(lockDetails.remaining_seconds)} remaining`}
               </span>
             </div>
-          </>
+          </div>
         ) : (
           <div className="lock-empty">
             <h3>No lock detected</h3>
@@ -720,7 +717,7 @@ const LockStep = ({
 
       <form className="lock-form" onSubmit={handleManageLock}>
         <div className="form-header">
-          <div>
+          <div className="form-header-text">
             <h3>{lockHeaderTitle}</h3>
             <p>{lockHeaderSubtitle}</p>
           </div>

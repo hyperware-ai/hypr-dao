@@ -159,6 +159,13 @@
   gap: 0.25rem;
 }
 
+.step-heading-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
 .step-description {
   margin: 0;
   color: var(--text-secondary);
@@ -174,10 +181,10 @@
 }
 
 .step-content {
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid var(--border-color);
-  border-radius: 16px;
-  padding: 1.25rem;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
 }
 
 .step-card {
@@ -245,7 +252,7 @@
 .lock-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 1rem;
 }
 
@@ -262,6 +269,23 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 1rem;
+}
+
+.lock-detail-card {
+  grid-column: 1 / -1;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 1rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.lock-detail-card .lock-card {
+  border: none;
+  background: transparent;
+  padding: 0;
 }
 
 .lock-card {
@@ -291,37 +315,6 @@
   font-size: 0.85rem;
   color: var(--text-secondary);
   overflow-wrap: anywhere;
-}
-
-.lock-detail-panel {
-  border: 1px dashed var(--border-color);
-  border-radius: 12px;
-  padding: 1.25rem;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 1rem;
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.lock-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.lock-detail-label {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-}
-
-.lock-detail-value {
-  font-size: 1.3rem;
-  font-weight: 600;
-}
-
-.lock-detail-sub {
-  font-size: 0.9rem;
-  color: var(--text-secondary);
 }
 
 .lock-empty {
@@ -481,6 +474,19 @@
   margin: 0.25rem 0 0;
   color: var(--text-secondary);
   font-size: 0.9rem;
+}
+
+.refresh-inline-button {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  padding: 0.2rem 0.4rem;
+}
+
+.refresh-inline-button:hover:not(:disabled) {
+  color: var(--text-primary);
+  text-decoration: underline;
 }
 
 .input-grid {
