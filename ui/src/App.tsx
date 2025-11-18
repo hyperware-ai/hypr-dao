@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useWaitForTransactionReceipt, useWriteContract } from 'wagmi';
 import { base, anvil } from 'wagmi/chains';
@@ -15,6 +15,11 @@ interface StepConfig {
   title: string;
   description: string;
   icon: StepIcon;
+}
+
+interface BannerMessage {
+  id: number;
+  text: string;
 }
 
 const steps: StepConfig[] = [
@@ -377,8 +382,11 @@ const LockStep = ({
   const [amountInput, setAmountInput] = useState('');
   const [durationInputs, setDurationInputs] = useState<DurationInputValues>(createDefaultDurationInputs);
   const [showLockPrecision, setShowLockPrecision] = useState(false);
-  const [manageError, setManageError] = useState<string | null>(null);
+  const [manageError, setManageError] = useState<BannerMessage | null>(null);
   const [manageSuccessHash, setManageSuccessHash] = useState<`0x${string}` | null>(null);
+  const manageErrorIdRef = useRef(0);
+  const manageErrorRef = useRef<HTMLDivElement | null>(null);
+  const manageSuccessRef = useRef<HTMLDivElement | null>(null);
 
   const [pendingLock, setPendingLock] = useState<{ amount: bigint; duration: bigint } | null>(null);
 
@@ -422,14 +430,14 @@ const LockStep = ({
 
   useEffect(() => {
     if (allowanceWriteError) {
-      setManageError(getErrorMessage(allowanceWriteError));
+      pushManageError(getErrorMessage(allowanceWriteError));
       setPendingLock(null);
     }
   }, [allowanceWriteError]);
 
   useEffect(() => {
     if (manageWriteError) {
-      setManageError(getErrorMessage(manageWriteError));
+      pushManageError(getErrorMessage(manageWriteError));
     }
   }, [manageWriteError]);
 
@@ -437,6 +445,12 @@ const LockStep = ({
     if (manageError) {
       const timeout = setTimeout(() => setManageError(null), 10_000);
       return () => clearTimeout(timeout);
+    }
+  }, [manageError]);
+
+  useEffect(() => {
+    if (manageError) {
+      manageErrorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }, [manageError]);
 
@@ -463,10 +477,21 @@ const LockStep = ({
   }, [manageSuccessHash]);
 
   useEffect(() => {
+    if (manageSuccessHash) {
+      manageSuccessRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [manageSuccessHash]);
+
+  useEffect(() => {
     if (isAllowanceConfirmed && pendingLock) {
       void triggerLock(pendingLock);
     }
   }, [isAllowanceConfirmed, pendingLock]);
+
+  const pushManageError = (message: string) => {
+    manageErrorIdRef.current += 1;
+    setManageError({ id: manageErrorIdRef.current, text: message });
+  };
 
   const handleLockDurationInputChange = (field: DurationField, value: string) => {
     setDurationInputs((prev) => ({ ...prev, [field]: value }));
@@ -490,7 +515,7 @@ const LockStep = ({
         args: [amount, duration],
       });
     } catch (err) {
-      setManageError(getErrorMessage(err));
+      pushManageError(getErrorMessage(err));
       setPendingLock(null);
     }
   };
@@ -505,25 +530,25 @@ const LockStep = ({
     }
 
     if (!walletConnected || !walletAddress) {
-      setManageError('Connect a wallet to manage locks.');
+      pushManageError('Connect a wallet to manage locks.');
       return;
     }
 
     if (!amountInput || Number(amountInput) <= 0) {
-      setManageError('Enter a positive HYPR amount.');
+      pushManageError('Enter a positive HYPR amount.');
       return;
     }
 
     if (lockDurationSeconds <= 0n) {
-      setManageError('Enter a positive duration.');
+      pushManageError('Enter a positive duration.');
       return;
     }
     if (lockDurationSeconds < BigInt(MIN_LOCK_DURATION_SECONDS)) {
-      setManageError(`Duration must be at least ${formatDurationSeconds(MIN_LOCK_DURATION_SECONDS)}.`);
+      pushManageError(`Duration must be at least ${formatDurationSeconds(MIN_LOCK_DURATION_SECONDS)}.`);
       return;
     }
     if (lockDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
-      setManageError(`Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`);
+      pushManageError(`Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`);
       return;
     }
 
@@ -533,7 +558,7 @@ const LockStep = ({
 
     if (requiredAllowance > 0n) {
       if (!hyprTokenAddress) {
-        setManageError('Unable to resolve HYPR token address.');
+        pushManageError('Unable to resolve HYPR token address.');
         return;
       }
       setPendingLock({ amount: amountWei, duration: lockDurationSeconds });
@@ -546,7 +571,7 @@ const LockStep = ({
         });
       } catch (err) {
         setPendingLock(null);
-        setManageError(getErrorMessage(err));
+        pushManageError(getErrorMessage(err));
       }
       return;
     }
@@ -655,9 +680,15 @@ const LockStep = ({
           durationSeconds={lockDurationSeconds}
           unlockPreview={lockUnlockPreview}
         />
-        {manageError && <div className="inline-error">{manageError}</div>}
+        {manageError && (
+          <div className="inline-error" ref={manageErrorRef}>
+            {manageError.text}
+          </div>
+        )}
         {manageSuccessHash && (
-          <div className="inline-success">Lock updated! Tx {shortHash(manageSuccessHash)}</div>
+          <div className="inline-success" ref={manageSuccessRef}>
+            Lock updated! Tx {shortHash(manageSuccessHash)}
+          </div>
         )}
       </form>
 
@@ -706,8 +737,11 @@ const BindStep = ({
     createDefaultDurationInputs,
   );
   const [showTransferPrecision, setShowTransferPrecision] = useState(false);
-  const [transferError, setTransferError] = useState<string | null>(null);
+  const [transferError, setTransferError] = useState<BannerMessage | null>(null);
   const [transferSuccessHash, setTransferSuccessHash] = useState<`0x${string}` | null>(null);
+  const transferErrorIdRef = useRef(0);
+  const transferErrorRef = useRef<HTMLDivElement | null>(null);
+  const transferSuccessRef = useRef<HTMLDivElement | null>(null);
 
   const {
     data: transferTxHash,
@@ -725,7 +759,7 @@ const BindStep = ({
 
   useEffect(() => {
     if (transferWriteError) {
-      setTransferError(getErrorMessage(transferWriteError));
+      pushTransferError(getErrorMessage(transferWriteError));
     }
   }, [transferWriteError]);
 
@@ -733,6 +767,12 @@ const BindStep = ({
     if (transferError) {
       const timeout = setTimeout(() => setTransferError(null), 10_000);
       return () => clearTimeout(timeout);
+    }
+  }, [transferError]);
+
+  useEffect(() => {
+    if (transferError) {
+      transferErrorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }, [transferError]);
 
@@ -751,6 +791,11 @@ const BindStep = ({
     const nowSeconds = Math.floor(Date.now() / 1000);
     return formatTimestamp(nowSeconds + Number(transferDurationSeconds));
   }, [transferDurationSeconds]);
+
+  const pushTransferError = (message: string) => {
+    transferErrorIdRef.current += 1;
+    setTransferError({ id: transferErrorIdRef.current, text: message });
+  };
 
   const handleTransferDurationInputChange = (field: DurationField, value: string) => {
     setTransferDurationInputs((prev) => ({ ...prev, [field]: value }));
@@ -788,6 +833,12 @@ const BindStep = ({
     }
   }, [transferSuccessHash]);
 
+  useEffect(() => {
+    if (transferSuccessHash) {
+      transferSuccessRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [transferSuccessHash]);
+
   if (!connectComplete) {
     return <></>;
   }
@@ -797,17 +848,17 @@ const BindStep = ({
     setTransferError(null);
 
     if (!walletConnected || !walletAddress) {
-      setTransferError('Connect a wallet to transfer registrations.');
+      pushTransferError('Connect a wallet to transfer registrations.');
       return;
     }
 
     if (!dstNameInput.trim()) {
-      setTransferError('Destination name is required.');
+      pushTransferError('Destination name is required.');
       return;
     }
 
     if (!transferAmountInput || Number(transferAmountInput) <= 0) {
-      setTransferError('Enter a positive HYPR amount to transfer.');
+      pushTransferError('Enter a positive HYPR amount to transfer.');
       return;
     }
 
@@ -815,21 +866,21 @@ const BindStep = ({
     if (availableToBind) {
       const availableWei = BigInt(availableToBind.amount_raw_wei);
       if (maxAmountWei > availableWei) {
-        setTransferError('Amount exceeds HYPR available to bind.');
+        pushTransferError('Amount exceeds HYPR available to bind.');
         return;
       }
     }
 
     if (transferDurationSeconds <= 0n) {
-      setTransferError('Enter a positive duration.');
+      pushTransferError('Enter a positive duration.');
       return;
     }
     if (transferDurationSeconds < BigInt(MIN_LOCK_DURATION_SECONDS)) {
-      setTransferError(`Duration must be at least ${formatDurationSeconds(MIN_LOCK_DURATION_SECONDS)}.`);
+      pushTransferError(`Duration must be at least ${formatDurationSeconds(MIN_LOCK_DURATION_SECONDS)}.`);
       return;
     }
     if (transferDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
-      setTransferError(`Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`);
+      pushTransferError(`Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`);
       return;
     }
 
@@ -837,7 +888,7 @@ const BindStep = ({
       const srcHash = resolveNamehash(srcNameInput);
       const dstHash = resolveNamehash(dstNameInput);
       if (dstHash === ZERO_NAMEHASH) {
-        setTransferError('Destination cannot be the default registration.');
+        pushTransferError('Destination cannot be the default registration.');
         return;
       }
 
@@ -848,7 +899,7 @@ const BindStep = ({
         args: [srcHash, dstHash, maxAmountWei, transferDurationSeconds],
       });
     } catch (error) {
-      setTransferError(getErrorMessage(error));
+        pushTransferError(getErrorMessage(error));
     }
   };
 
@@ -946,9 +997,15 @@ const BindStep = ({
           durationSeconds={transferDurationSeconds}
           unlockPreview={transferUnlockPreview}
         />
-        {transferError && <div className="inline-error">{transferError}</div>}
+        {transferError && (
+          <div className="inline-error" ref={transferErrorRef}>
+            {transferError.text}
+          </div>
+        )}
         {transferSuccessHash && (
-          <div className="inline-success">Binding updated! Tx {shortHash(transferSuccessHash)}</div>
+          <div className="inline-success" ref={transferSuccessRef}>
+            Binding updated! Tx {shortHash(transferSuccessHash)}
+          </div>
         )}
       </form>
     </section>
@@ -1122,13 +1179,17 @@ const resolveNamehash = (input: string): `0x${string}` => {
 };
 
 const formatDurationSeconds = (seconds: number) => {
-  const weeks = seconds / 604800;
-  if (Number.isInteger(weeks)) {
-    return `${weeks.toLocaleString()} week${weeks === 1 ? '' : 's'} (${seconds.toLocaleString()} seconds)`;
-  }
-  const days = seconds / 86400;
-  if (Number.isInteger(days)) {
-    return `${days.toLocaleString()} day${days === 1 ? '' : 's'} (${seconds.toLocaleString()} seconds)`;
+  const units = [
+    { label: 'year', value: SECONDS_PER_YEAR },
+    { label: 'month', value: SECONDS_PER_MONTH },
+    { label: 'week', value: SECONDS_PER_WEEK },
+    { label: 'day', value: SECONDS_PER_DAY },
+  ];
+  for (const unit of units) {
+    const amount = seconds / unit.value;
+    if (Number.isInteger(amount)) {
+      return `${amount.toLocaleString()} ${unit.label}${amount === 1 ? '' : 's'} (${seconds.toLocaleString()} seconds)`;
+    }
   }
   return `${seconds.toLocaleString()} seconds`;
 };
