@@ -10,6 +10,7 @@ interface LockAndBindStore extends LockAndBindState {
   refreshLockStatus: () => Promise<void>;
   setError: (error: string | null) => void;
   clearError: () => void;
+  acknowledgeLockModal: () => Promise<void>;
 }
 
 // Create the Zustand store
@@ -27,6 +28,7 @@ export const useBindAndLockStore = create<LockAndBindStore>((set, get) => ({
   lastError: null,
   isLoading: false,
   error: null,
+  lockModalSeen: false,
 
   initialize: () => {
     const nodeId = getNodeId();
@@ -68,6 +70,14 @@ export const useBindAndLockStore = create<LockAndBindStore>((set, get) => ({
 
   setError: (error) => set({ error }),
   clearError: () => set({ error: null }),
+  acknowledgeLockModal: async () => {
+    try {
+      await App.acknowledge_lock_modal();
+      set({ lockModalSeen: true });
+    } catch (error) {
+      set({ error: getErrorMessage(error) });
+    }
+  },
 }));
 
 function getErrorMessage(error: unknown): string {
@@ -87,6 +97,7 @@ function applyStatus(status: LockStatusPayload, set: (updater: Partial<LockAndBi
     bindings: status.bindings ?? [],
     lastError: status.error,
     isLoading: false,
+    lockModalSeen: status.lock_modal_seen,
   });
 }
 

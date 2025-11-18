@@ -5,10 +5,6 @@ process_macros = "0.1"
 serde_json = "1.0"
 wit-bindgen = "0.42.1"
 
-[dependencies.bind_and_lock_caller_utils]
-optional = true
-path = "../target/bind-and-lock-caller-utils"
-
 [dependencies.hyperprocess_macro]
 git = "https://github.com/hyperware-ai/hyperprocess-macro"
 rev = "aaf7e02"
@@ -18,12 +14,16 @@ features = ["hyperapp"]
 git = "https://github.com/hyperware-ai/process_lib.git"
 rev = "77e5014ddd0baf53f69c0a7f21b1100f9d20e2c8"
 
+[dependencies.lock_and_bind_caller_utils]
+optional = true
+path = "../target/lock-and-bind-caller-utils"
+
 [dependencies.serde]
 features = ["derive"]
 version = "1.0"
 
 [features]
-caller-utils = ["bind_and_lock_caller_utils"]
+caller-utils = ["lock_and_bind_caller_utils"]
 
 [lib]
 crate-type = ["cdylib"]

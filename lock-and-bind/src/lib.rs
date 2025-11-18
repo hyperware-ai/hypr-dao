@@ -67,6 +67,7 @@ struct LockStatusPayload {
     available_to_bind: Option<BalanceView>,
     bindings: Vec<BindDetailsView>,
     error: Option<String>,
+    lock_modal_seen: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -81,6 +82,7 @@ struct AppState {
     available_to_bind: Option<BalanceView>,
     bindings: Vec<BindDetailsView>,
     last_error: Option<String>,
+    lock_modal_seen: bool,
 }
 
 impl Default for AppState {
@@ -96,6 +98,7 @@ impl Default for AppState {
             available_to_bind: None,
             bindings: Vec::new(),
             last_error: None,
+            lock_modal_seen: false,
         }
     }
 }
@@ -136,6 +139,12 @@ impl AppState {
             }
         }
     }
+
+    #[http]
+    async fn acknowledge_lock_modal(&mut self) -> Result<(), String> {
+        self.lock_modal_seen = true;
+        Ok(())
+    }
 }
 
 impl AppState {
@@ -151,6 +160,7 @@ impl AppState {
             available_to_bind: self.available_to_bind.clone(),
             bindings: self.bindings.clone(),
             error: self.last_error.clone(),
+            lock_modal_seen: self.lock_modal_seen,
         }
     }
 

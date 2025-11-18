@@ -6,6 +6,6 @@ panic = "abort"
 [workspace]
 members = [
     "lock-and-bind",
-    "target/bind-and-lock-caller-util?",
+    "target/lock-and-bind-caller-util?",
 ]
 resolver = "2"

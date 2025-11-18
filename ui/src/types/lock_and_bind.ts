@@ -30,6 +30,7 @@ export interface LockStatusPayload {
   available_to_bind: BalanceView | null;
   bindings: BindingView[];
   error: string | null;
+  lock_modal_seen: boolean;
 }
 
 export interface LockAndBindState {
@@ -46,4 +47,5 @@ export interface LockAndBindState {
   lastError: string | null;
   isLoading: boolean;
   error: string | null;
+  lockModalSeen: boolean;
 }

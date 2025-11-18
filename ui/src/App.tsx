@@ -7,7 +7,7 @@ import './App.css';
 import { useBindAndLockStore } from './store/lock_and_bind';
 import type { BalanceView, BindingView, LockDetailsView } from './types/lock_and_bind';
 
-type StepId = 'approve' | 'lock' | 'bind';
+type StepId = 'lock' | 'bind';
 type StepIcon = 'check' | 'lock' | 'chain';
 
 interface StepConfig {
@@ -19,15 +19,9 @@ interface StepConfig {
 
 const steps: StepConfig[] = [
   {
-    id: 'approve',
-    title: 'Approve',
-    description: 'Allow the TokenRegistry to spend HYPR from your wallet when locking funds.',
-    icon: 'check',
-  },
-  {
     id: 'lock',
     title: 'Lock',
-    description: 'Manage lock duration and amount once your connections are ready.',
+    description: 'Approve HYPR and manage lock duration and amount.',
     icon: 'lock',
   },
   {
@@ -56,6 +50,19 @@ const tokenRegistryAbi = [
   },
 ] as const;
 
+const erc20ApproveAbi = [
+  {
+    type: 'function',
+    name: 'approve',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'spender', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [{ name: '', type: 'bool' }],
+  },
+] as const;
+
 const transferRegistrationAbi = [
   {
     type: 'function',
@@ -71,25 +78,13 @@ const transferRegistrationAbi = [
   },
 ] as const;
 
-const erc20ApproveAbi = [
-  {
-    type: 'function',
-    name: 'approve',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'spender', type: 'address' },
-      { name: 'amount', type: 'uint256' },
-    ],
-    outputs: [{ name: '', type: 'bool' }],
-  },
-] as const;
-
 const MIN_LOCK_DURATION_SECONDS = 4 * 7 * 24 * 60 * 60; // 4 weeks
 const MAX_LOCK_DURATION_SECONDS = 4 * 52 * 7 * 24 * 60 * 60; // ~4 years
 const ZERO_NAMEHASH = '0x0000000000000000000000000000000000000000000000000000000000000000' as const;
 
 function App() {
-  const [activeStep, setActiveStep] = useState<StepId>('approve');
+  const [activeStep, setActiveStep] = useState<StepId>('lock');
+  const [showLockModal, setShowLockModal] = useState(false);
   const {
     nodeId,
     isConnected,
@@ -101,6 +96,7 @@ function App() {
     availableToBind,
     bindings,
     hyprTokenAddress,
+    lockModalSeen,
     lastError,
     isLoading,
     error,
@@ -108,8 +104,12 @@ function App() {
     fetchLockStatus,
     refreshLockStatus,
     clearError,
+    acknowledgeLockModal,
   } = useBindAndLockStore();
   const { address, chain, isConnected: isWalletConnected } = useAccount();
+
+  const showLockInfoModal = () => setShowLockModal(true);
+  const dismissLockInfoModal = () => setShowLockModal(false);
 
   const targetRegistryAddress = useMemo(() => {
     if (chain?.id && TOKEN_REGISTRY_ADDRESSES[chain.id]) {
@@ -123,22 +123,17 @@ function App() {
   }, [initialize]);
 
   const connectComplete = Boolean(isConnected && nodeId && isWalletConnected);
-  const hasAllowance = Boolean(
-    tokeregistryAllowance && tokeregistryAllowance.amount_raw_wei !== '0'
-  );
-  const hasLockedAmount = Boolean(lockDetails && lockDetails.amount_raw_wei !== '0');
-  const lockTabEnabled = connectComplete && (hasAllowance || hasLockedAmount);
   const bindTabEnabled =
-    lockTabEnabled &&
+    connectComplete &&
     ((availableToBind && availableToBind.amount_raw_wei !== '0') || bindings.length > 0);
 
   useEffect(() => {
-    if (!lockTabEnabled && (activeStep === 'lock' || activeStep === 'bind')) {
-      setActiveStep('approve');
-    } else if (lockTabEnabled && !bindTabEnabled && activeStep === 'bind') {
+    if (!connectComplete && activeStep === 'bind') {
+      setActiveStep('lock');
+    } else if (connectComplete && !bindTabEnabled && activeStep === 'bind') {
       setActiveStep('lock');
     }
-  }, [lockTabEnabled, bindTabEnabled, activeStep]);
+  }, [connectComplete, bindTabEnabled, activeStep]);
 
   useEffect(() => {
     if (connectComplete) {
@@ -147,11 +142,8 @@ function App() {
   }, [connectComplete, fetchLockStatus]);
 
   const canAccessStep = (id: StepId) => {
-    if (id === 'approve') {
-      return connectComplete;
-    }
     if (id === 'lock') {
-      return lockTabEnabled;
+      return connectComplete;
     }
     if (id === 'bind') {
       return bindTabEnabled;
@@ -203,19 +195,6 @@ function App() {
                 </div>
 
                 <main className="step-content">
-                  {activeStep === 'approve' && (
-                    <ApproveStep
-                      connectComplete={connectComplete}
-                      hyprOwned={hyprOwned}
-                      tokeregistryAllowance={tokeregistryAllowance}
-                      hyprTokenAddress={hyprTokenAddress}
-                      walletConnected={isWalletConnected}
-                      walletAddress={address}
-                      targetRegistryAddress={targetRegistryAddress}
-                      refreshLockStatus={refreshLockStatus}
-                    />
-                  )}
-
                   {activeStep === 'lock' && (
                     <LockStep
                       connectComplete={connectComplete}
@@ -226,12 +205,15 @@ function App() {
                       hyprApproved={hyprApproved}
                       tokeregistryAllowance={tokeregistryAllowance}
                       availableToBind={availableToBind}
+                      hyprTokenAddress={hyprTokenAddress}
                       lastError={lastError}
                       isLoading={isLoading}
                       refreshLockStatus={refreshLockStatus}
                       walletConnected={isWalletConnected}
                       walletAddress={address}
                       targetRegistryAddress={targetRegistryAddress}
+                      hasSeenLockModal={lockModalSeen}
+                      onRequireLockInfo={showLockInfoModal}
                     />
                   )}
 
@@ -249,6 +231,9 @@ function App() {
                 </main>
               </>
             )}
+
+            {!showContent && <div className="body-placeholder" />}
+
           </div>
 
           <BottomTabs
@@ -259,179 +244,31 @@ function App() {
           />
         </div>
       </div>
+      {showLockModal && (
+        <div className="modal-backdrop">
+          <div className="modal-card">
+            <h3>How locking works</h3>
+            <p>Locking HYPR can involve two blockchain transactions:</p>
+            <ol>
+              <li><strong>Approve HYPR:</strong> Authorizes the TokenRegistry to use the amount you specify.</li>
+              <li><strong>Lock HYPR:</strong> Moves the approved HYPR into the staking contract for the duration you choose.</li>
+            </ol>
+            <p>You only need to approve additional HYPR when your existing allowance is too low.</p>
+            <button
+              className="secondary-button"
+              onClick={async () => {
+                await acknowledgeLockModal();
+                dismissLockInfoModal();
+              }}
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
-
-interface ApproveStepProps {
-  connectComplete: boolean;
-  hyprOwned: BalanceView | null;
-  tokeregistryAllowance: BalanceView | null;
-  hyprTokenAddress: string | null;
-  walletConnected: boolean;
-  walletAddress?: `0x${string}`;
-  targetRegistryAddress: `0x${string}`;
-  refreshLockStatus: () => Promise<void>;
-}
-
-const ApproveStep = ({
-  connectComplete,
-  hyprOwned,
-  tokeregistryAllowance,
-  hyprTokenAddress,
-  walletConnected,
-  walletAddress,
-  targetRegistryAddress,
-  refreshLockStatus,
-}: ApproveStepProps) => {
-  const [allowanceInput, setAllowanceInput] = useState('');
-  const [allowanceError, setAllowanceError] = useState<string | null>(null);
-
-  const {
-    data: allowanceTxHash,
-    error: allowanceWriteError,
-    isPending: isAllowancePending,
-    writeContract: writeApproveContract,
-  } = useWriteContract();
-
-  const {
-    isLoading: isAllowanceConfirming,
-    isSuccess: isAllowanceConfirmed,
-  } = useWaitForTransactionReceipt({
-    hash: allowanceTxHash,
-  });
-
-  useEffect(() => {
-    if (allowanceWriteError) {
-      setAllowanceError(getErrorMessage(allowanceWriteError));
-    }
-  }, [allowanceWriteError]);
-
-  useEffect(() => {
-    if (isAllowanceConfirmed) {
-      setAllowanceInput('');
-      void refreshLockStatus();
-    }
-  }, [isAllowanceConfirmed, refreshLockStatus]);
-
-  const handleSetAllowance = async (event: FormEvent) => {
-    event.preventDefault();
-    setAllowanceError(null);
-
-    if (!walletConnected || !walletAddress) {
-      setAllowanceError('Connect a wallet to set allowance.');
-      return;
-    }
-
-    if (!hyprTokenAddress) {
-      setAllowanceError('Unable to resolve HYPR token address.');
-      return;
-    }
-
-    if (allowanceInput === '') {
-      setAllowanceError('Enter an allowance amount (can be zero).');
-      return;
-    }
-
-    const allowanceValue = Number(allowanceInput);
-    if (Number.isNaN(allowanceValue) || allowanceValue < 0) {
-      setAllowanceError('Enter a non-negative allowance.');
-      return;
-    }
-
-    const amountWei = parseEther(allowanceInput || '0');
-    if (hyprOwned) {
-      const ownedWei = BigInt(hyprOwned.amount_raw_wei);
-      if (amountWei > ownedWei) {
-        setAllowanceError('Allowance cannot exceed wallet HYPR balance.');
-        return;
-      }
-    }
-
-    try {
-      await writeApproveContract({
-        address: hyprTokenAddress as `0x${string}`,
-        abi: erc20ApproveAbi,
-        functionName: 'approve',
-        args: [targetRegistryAddress, amountWei],
-      });
-    } catch (err) {
-      setAllowanceError(getErrorMessage(err));
-    }
-  };
-
-  if (!connectComplete) {
-    return <></>;
-  }
-
-  return (
-    <section className="step-card lock-step">
-      <div className="lock-header">
-        <div>
-          <h2>Approve HYPR</h2>
-          <p className="lock-subtitle">Authorize the TokenRegistry to lock HYPR from your connected wallet.</p>
-        </div>
-        <button
-          type="button"
-          className="secondary-button"
-          onClick={() => void refreshLockStatus()}
-        >
-          Refresh balances
-        </button>
-      </div>
-
-      <div className="lock-grid">
-        <LockMetric
-          label="HYPR owned"
-          value={hyprOwned?.amount_formatted_hypr ?? 'Loading…'}
-          subValue={hyprOwned?.amount_raw_wei ? `${hyprOwned.amount_raw_wei} wei` : undefined}
-        />
-        <LockMetric
-          label="Current allowance"
-          value={tokeregistryAllowance?.amount_formatted_hypr ?? 'Loading…'}
-          subValue={tokeregistryAllowance?.amount_raw_wei ? `${tokeregistryAllowance.amount_raw_wei} wei` : undefined}
-        />
-      </div>
-
-      <form className="lock-form" onSubmit={handleSetAllowance}>
-        <div className="form-header">
-          <div>
-            <h3>Set lockable allowance</h3>
-            <p>Define how much HYPR the TokenRegistry may lock on your behalf.</p>
-          </div>
-          <button
-            type="submit"
-            className="secondary-button"
-            disabled={!walletConnected || isAllowancePending || isAllowanceConfirming}
-          >
-            {isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Approve'}
-          </button>
-        </div>
-        <div className="input-grid">
-          <label className="input-field">
-            <span>New allowance (HYPR)</span>
-            <input
-              type="number"
-              min="0"
-              step="0.000000000000000001"
-              placeholder="100.0"
-              value={allowanceInput}
-              onChange={(event) => setAllowanceInput(event.target.value)}
-            />
-          </label>
-          <label className="input-field" title="Current allowance">
-            <span>Current allowance</span>
-            <input type="text" value={tokeregistryAllowance?.amount_formatted_hypr ?? 'Loading…'} disabled />
-          </label>
-        </div>
-        {allowanceError && <div className="inline-error">{allowanceError}</div>}
-        {isAllowanceConfirmed && allowanceTxHash && (
-          <div className="inline-success">Allowance updated! Tx {shortHash(allowanceTxHash)}</div>
-        )}
-      </form>
-    </section>
-  );
-};
 
 interface LockStepProps {
   connectComplete: boolean;
@@ -442,12 +279,15 @@ interface LockStepProps {
   hyprApproved: BalanceView | null;
   tokeregistryAllowance: BalanceView | null;
   availableToBind: BalanceView | null;
+  hyprTokenAddress: string | null;
   lastError: string | null;
   isLoading: boolean;
   refreshLockStatus: () => Promise<void>;
   walletConnected: boolean;
   walletAddress?: `0x${string}`;
   targetRegistryAddress: `0x${string}`;
+  hasSeenLockModal: boolean;
+  onRequireLockInfo: () => void;
 }
 
 const LockStep = ({
@@ -459,16 +299,28 @@ const LockStep = ({
   hyprApproved,
   tokeregistryAllowance,
   availableToBind,
+  hyprTokenAddress,
   lastError,
   isLoading,
   refreshLockStatus,
   walletConnected,
   walletAddress,
   targetRegistryAddress,
+  hasSeenLockModal,
+  onRequireLockInfo,
 }: LockStepProps) => {
   const [amountInput, setAmountInput] = useState('');
   const [durationInput, setDurationInput] = useState('');
   const [manageError, setManageError] = useState<string | null>(null);
+
+  const [pendingLock, setPendingLock] = useState<{ amount: bigint; duration: bigint } | null>(null);
+
+  const {
+    data: allowanceTxHash,
+    error: allowanceWriteError,
+    isPending: isAllowancePending,
+    writeContract: writeApproveContract,
+  } = useWriteContract();
 
   const {
     data: manageTxHash,
@@ -478,11 +330,25 @@ const LockStep = ({
   } = useWriteContract();
 
   const {
+    isLoading: isAllowanceConfirming,
+    isSuccess: isAllowanceConfirmed,
+  } = useWaitForTransactionReceipt({
+    hash: allowanceTxHash,
+  });
+
+  const {
     isLoading: isManageConfirming,
     isSuccess: isManageConfirmed,
   } = useWaitForTransactionReceipt({
     hash: manageTxHash,
   });
+
+  useEffect(() => {
+    if (allowanceWriteError) {
+      setManageError(getErrorMessage(allowanceWriteError));
+      setPendingLock(null);
+    }
+  }, [allowanceWriteError]);
 
   useEffect(() => {
     if (manageWriteError) {
@@ -494,13 +360,39 @@ const LockStep = ({
     if (isManageConfirmed) {
       setAmountInput('');
       setDurationInput('');
+      setPendingLock(null);
       void refreshLockStatus();
     }
   }, [isManageConfirmed, refreshLockStatus]);
 
+  useEffect(() => {
+    if (isAllowanceConfirmed && pendingLock) {
+      void triggerLock(pendingLock);
+    }
+  }, [isAllowanceConfirmed, pendingLock]);
+
+  const triggerLock = async ({ amount, duration }: { amount: bigint; duration: bigint }) => {
+    try {
+      await writeManageLock({
+        address: targetRegistryAddress,
+        abi: tokenRegistryAbi,
+        functionName: 'manageLock',
+        args: [amount, duration],
+      });
+    } catch (err) {
+      setManageError(getErrorMessage(err));
+      setPendingLock(null);
+    }
+  };
+
   const handleManageLock = async (event: FormEvent) => {
     event.preventDefault();
     setManageError(null);
+
+    if (!hasSeenLockModal) {
+      onRequireLockInfo();
+      return;
+    }
 
     if (!walletConnected || !walletAddress) {
       setManageError('Connect a wallet to manage locks.');
@@ -527,23 +419,31 @@ const LockStep = ({
       return;
     }
 
-    const approvedWei = hyprApproved ? BigInt(hyprApproved.amount_raw_wei) : null;
     const amountWei = parseEther(amountInput);
-    if (approvedWei !== null && amountWei > approvedWei) {
-      setManageError('Amount exceeds HYPR approved for locking.');
+    const allowanceWei = tokeregistryAllowance ? BigInt(tokeregistryAllowance.amount_raw_wei) : 0n;
+    const requiredAllowance = amountWei > allowanceWei ? amountWei - allowanceWei : 0n;
+
+    if (requiredAllowance > 0n) {
+      if (!hyprTokenAddress) {
+        setManageError('Unable to resolve HYPR token address.');
+        return;
+      }
+      setPendingLock({ amount: amountWei, duration: durationSeconds });
+      try {
+        await writeApproveContract({
+          address: hyprTokenAddress as `0x${string}`,
+          abi: erc20ApproveAbi,
+          functionName: 'approve',
+          args: [targetRegistryAddress, requiredAllowance],
+        });
+      } catch (err) {
+        setPendingLock(null);
+        setManageError(getErrorMessage(err));
+      }
       return;
     }
 
-    try {
-      await writeManageLock({
-        address: targetRegistryAddress,
-        abi: tokenRegistryAbi,
-        functionName: 'manageLock',
-        args: [amountWei, durationSeconds],
-      });
-    } catch (err) {
-      setManageError(getErrorMessage(err));
-    }
+    await triggerLock({ amount: amountWei, duration: durationSeconds });
   };
 
   if (!connectComplete) {
@@ -568,29 +468,22 @@ const LockStep = ({
       </div>
 
       <div className="lock-grid">
-        <LockMetric label="Node ID" value={nodeId ?? 'Unknown'} />
-        <LockMetric label="Owner address" value={ownerAddress ?? 'Resolving…'} />
         <LockMetric
           label="HYPR owned"
           value={hyprOwned?.amount_formatted_hypr ?? 'Loading…'}
           subValue={hyprOwned?.amount_raw_wei ? `${hyprOwned.amount_raw_wei} wei` : undefined}
         />
-        <LockMetric
-          label="HYPR approved"
-          value={hyprApproved?.amount_formatted_hypr ?? 'Loading…'}
-          subValue={hyprApproved?.amount_raw_wei ? `${hyprApproved.amount_raw_wei} wei` : undefined}
-        />
-        <LockMetric
-          label="Registry allowance"
-          value={tokeregistryAllowance?.amount_formatted_hypr ?? 'Loading…'}
-          subValue={tokeregistryAllowance?.amount_raw_wei ? `${tokeregistryAllowance.amount_raw_wei} wei` : undefined}
-        />
-        <LockMetric
-          label="Available to bind"
-          value={availableToBind?.amount_formatted_hypr ?? '0 HYPR'}
-          subValue={availableToBind?.amount_raw_wei ? `${availableToBind.amount_raw_wei} wei` : undefined}
-        />
       </div>
+
+      {tokeregistryAllowance && tokeregistryAllowance.amount_raw_wei !== '0' && (
+        <div className="lock-grid">
+          <LockMetric
+            label="Previously allowed"
+            value={tokeregistryAllowance.amount_formatted_hypr}
+            subValue={`${tokeregistryAllowance.amount_raw_wei} wei`}
+          />
+        </div>
+      )}
 
       <div className="lock-detail-panel">
         {lockDetails ? (
@@ -618,52 +511,50 @@ const LockStep = ({
         )}
       </div>
 
-      <div className="lock-forms">
-        <form className="lock-form" onSubmit={handleManageLock}>
-          <div className="form-header">
-            <div>
-              <h3>Manage lock</h3>
-              <p>Adjust locked HYPR amount and duration.</p>
-            </div>
-            <button
-              type="submit"
-              className="secondary-button"
-              disabled={!walletConnected || isManagePending || isManageConfirming}
-            >
-              {isManagePending || isManageConfirming ? <span className="spinner" /> : 'Submit'}
-            </button>
+      <form className="lock-form" onSubmit={handleManageLock}>
+        <div className="form-header">
+          <div>
+            <h3>Manage lock</h3>
+            <p>Adjust locked HYPR amount and duration.</p>
           </div>
-          <div className="input-grid">
-            <label className="input-field">
-              <span>Amount (HYPR)</span>
-              <input
-                type="number"
-                min="0"
-                step="0.000000000000000001"
-                placeholder="250.0"
-                value={amountInput}
-                onChange={(event) => setAmountInput(event.target.value)}
-              />
-            </label>
-            <label className="input-field">
-              <span>Duration (seconds)</span>
-              <input
-                type="number"
-                min={MIN_LOCK_DURATION_SECONDS}
-                max={MAX_LOCK_DURATION_SECONDS}
-                step="1"
-                placeholder={MIN_LOCK_DURATION_SECONDS.toString()}
-                value={durationInput}
-                onChange={(event) => setDurationInput(event.target.value)}
-              />
-            </label>
-          </div>
-          {manageError && <div className="inline-error">{manageError}</div>}
-          {isManageConfirmed && manageTxHash && (
-            <div className="inline-success">Lock updated! Tx {shortHash(manageTxHash)}</div>
-          )}
-        </form>
-      </div>
+          <button
+            type="submit"
+            className="secondary-button"
+            disabled={!walletConnected || isManagePending || isManageConfirming || isAllowancePending || isAllowanceConfirming}
+          >
+            {isManagePending || isManageConfirming || isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Lock'}
+          </button>
+        </div>
+        <div className="input-grid">
+          <label className="input-field">
+            <span>Amount (HYPR)</span>
+            <input
+              type="number"
+              min="0"
+              step="0.000000000000000001"
+              placeholder="250.0"
+              value={amountInput}
+              onChange={(event) => setAmountInput(event.target.value)}
+            />
+          </label>
+          <label className="input-field">
+            <span>Duration (seconds)</span>
+            <input
+              type="number"
+              min={MIN_LOCK_DURATION_SECONDS}
+              max={MAX_LOCK_DURATION_SECONDS}
+              step="1"
+              placeholder={MIN_LOCK_DURATION_SECONDS.toString()}
+              value={durationInput}
+              onChange={(event) => setDurationInput(event.target.value)}
+            />
+          </label>
+        </div>
+        {manageError && <div className="inline-error">{manageError}</div>}
+        {isManageConfirmed && manageTxHash && (
+          <div className="inline-success">Lock updated! Tx {shortHash(manageTxHash)}</div>
+        )}
+      </form>
 
       {lastError && <div className="inline-error">{lastError}</div>}
     </section>

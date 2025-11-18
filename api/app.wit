@@ -11,7 +11,8 @@ use standard.{address};
         hypr-token-address: option<string>,
         available-to-bind: option<balance-view>,
         bindings: list<bind-details-view>,
-        error: option<string>
+        error: option<string>,
+        lock-modal-seen: bool
     }
 
     record bind-details-view {
@@ -33,6 +34,13 @@ use standard.{address};
         amount-formatted-hypr: string,
         unlock-timestamp: u64,
         remaining-seconds: u64
+    }
+
+    // Function signature for: acknowledge-lock-modal (http)
+    // HTTP: POST /api/acknowledge-lock-modal
+    record acknowledge-lock-modal-signature-http {
+        target: string,
+        returning: result<_, string>
     }
 
     // Function signature for: get-lock-status (http)
