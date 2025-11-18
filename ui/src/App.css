@@ -348,6 +348,43 @@
   background: rgba(81, 207, 102, 0.15);
 }
 
+.hypr-required-card {
+  margin-top: 0.75rem;
+  border: 1px solid rgba(255, 149, 0, 0.6);
+  background: rgba(255, 149, 0, 0.12);
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+}
+
+.hypr-required-card h3 {
+  margin: 0 0 0.35rem;
+}
+
+.warning-card {
+  border: 1px solid rgba(255, 149, 0, 0.6);
+  background: rgba(255, 149, 0, 0.15);
+  border-radius: 10px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.warning-button {
+  align-self: flex-start;
+  border: 1px solid rgba(255, 149, 0, 0.8);
+  background: rgba(255, 149, 0, 0.2);
+  color: #ff9500;
+  padding: 0.35rem 0.85rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.warning-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .bottom-tabs {
   display: flex;
   border-top: 1px solid var(--border-color);

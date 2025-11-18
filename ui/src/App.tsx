@@ -192,18 +192,29 @@ function App() {
     initialize();
   }, [initialize]);
 
-  const connectComplete = Boolean(isConnected && nodeId && isWalletConnected);
+  const walletConnected = Boolean(isWalletConnected && address);
+  const connectComplete = Boolean(isConnected && nodeId && walletConnected);
+  const hyprOwnedWei = hyprOwned?.amount_raw_wei ? BigInt(hyprOwned.amount_raw_wei) : 0n;
+  const lockedWei = lockDetails?.amount_raw_wei ? BigInt(lockDetails.amount_raw_wei) : 0n;
+  const hasBalanceData = hyprOwned !== null;
+  const hasHyprHoldings = hyprOwnedWei > 0n || lockedWei > 0n;
+  const showHyprRequiredNotice =
+    walletConnected && connectComplete && hasBalanceData && !hasHyprHoldings;
+  const showContent = connectComplete && !showHyprRequiredNotice;
+  const lockTabEnabled = showContent;
   const bindTabEnabled =
-    connectComplete &&
+    showContent &&
     ((availableToBind && availableToBind.amount_raw_wei !== '0') || bindings.length > 0);
 
   useEffect(() => {
-    if (!connectComplete && activeStep === 'bind') {
+    if (!lockTabEnabled) {
       setActiveStep('lock');
-    } else if (connectComplete && !bindTabEnabled && activeStep === 'bind') {
+      return;
+    }
+    if (activeStep === 'bind' && !bindTabEnabled) {
       setActiveStep('lock');
     }
-  }, [connectComplete, bindTabEnabled, activeStep]);
+  }, [lockTabEnabled, bindTabEnabled, activeStep]);
 
   useEffect(() => {
     if (connectComplete) {
@@ -213,7 +224,7 @@ function App() {
 
   const canAccessStep = (id: StepId) => {
     if (id === 'lock') {
-      return connectComplete;
+      return lockTabEnabled;
     }
     if (id === 'bind') {
       return bindTabEnabled;
@@ -232,15 +243,13 @@ function App() {
   }, [activeStep]);
   const activeStepTitle = useMemo(() => steps.find((step) => step.id === activeStep)?.title ?? '', [activeStep]);
 
-  const showContent = connectComplete;
-
   return (
     <div className="app">
       <div className="phone-shell">
         <div className="phone-frame">
           <TopStatusBar
             hyperConnected={isConnected}
-            walletConnected={isWalletConnected}
+            walletConnected={walletConnected}
             walletAddress={address}
           />
 
@@ -248,6 +257,12 @@ function App() {
             <header className="app-header">
               <h1 className="app-title">🔐 Lock &amp; Bind</h1>
               <p className="app-subtitle">HYPR registry companion</p>
+              {showHyprRequiredNotice && (
+                <div className="hypr-required-card">
+                  <h3>HYPR required</h3>
+                  <p>This account must possess a HYPR balance to use this application.</p>
+                </div>
+              )}
             </header>
 
             {showContent && (
@@ -279,7 +294,7 @@ function App() {
                       lastError={lastError}
                       isLoading={isLoading}
                       refreshLockStatus={refreshLockStatus}
-                      walletConnected={isWalletConnected}
+                      walletConnected={walletConnected}
                       walletAddress={address}
                       targetRegistryAddress={targetRegistryAddress}
                       hasSeenLockModal={lockModalSeen}
@@ -290,7 +305,7 @@ function App() {
                   {activeStep === 'bind' && (
                     <BindStep
                       connectComplete={connectComplete}
-                      walletConnected={isWalletConnected}
+                      walletConnected={walletConnected}
                       walletAddress={address}
                       targetRegistryAddress={targetRegistryAddress}
                       availableToBind={availableToBind}
@@ -392,6 +407,7 @@ const LockStep = ({
 
   const durationParts = useMemo(() => inputsToDurationParts(durationInputs), [durationInputs]);
   const lockDurationSeconds = useMemo(() => durationPartsToSeconds(durationParts), [durationParts]);
+  const hasAllowance = tokeregistryAllowance && tokeregistryAllowance.amount_raw_wei !== '0';
   const lockUnlockPreview = useMemo(() => {
     if (lockDurationSeconds <= 0n) {
       return null;
@@ -488,6 +504,12 @@ const LockStep = ({
     }
   }, [isAllowanceConfirmed, pendingLock]);
 
+  useEffect(() => {
+    if (isAllowanceConfirmed && !pendingLock) {
+      void refreshLockStatus();
+    }
+  }, [isAllowanceConfirmed, pendingLock, refreshLockStatus]);
+
   const pushManageError = (message: string) => {
     manageErrorIdRef.current += 1;
     setManageError({ id: manageErrorIdRef.current, text: message });
@@ -517,6 +539,28 @@ const LockStep = ({
     } catch (err) {
       pushManageError(getErrorMessage(err));
       setPendingLock(null);
+    }
+  };
+
+  const handleResetApproval = async () => {
+    if (!walletConnected || !walletAddress) {
+      pushManageError('Connect a wallet to reset approvals.');
+      return;
+    }
+    if (!hyprTokenAddress) {
+      pushManageError('Unable to resolve HYPR token address.');
+      return;
+    }
+    try {
+      await writeApproveContract({
+        address: hyprTokenAddress as `0x${string}`,
+        abi: erc20ApproveAbi,
+        functionName: 'approve',
+        args: [targetRegistryAddress, 0n],
+      });
+      setPendingLock(null);
+    } catch (err) {
+      pushManageError(getErrorMessage(err));
     }
   };
 
@@ -608,13 +652,23 @@ const LockStep = ({
         />
       </div>
 
-      {tokeregistryAllowance && tokeregistryAllowance.amount_raw_wei !== '0' && (
+      {hasAllowance && tokeregistryAllowance && (
         <div className="lock-grid">
-          <LockMetric
-            label="Previously allowed"
-            value={tokeregistryAllowance.amount_formatted_hypr}
-            subValue={`${tokeregistryAllowance.amount_raw_wei} wei`}
-          />
+          <div className="warning-card">
+            <LockMetric
+              label="Previously allowed"
+              value={tokeregistryAllowance.amount_formatted_hypr}
+              subValue={`${tokeregistryAllowance.amount_raw_wei} wei`}
+            />
+            <button
+              type="button"
+              className="warning-button"
+              disabled={isAllowancePending || isAllowanceConfirming}
+              onClick={handleResetApproval}
+            >
+              {isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Reset approval'}
+            </button>
+          </div>
         </div>
       )}
 
@@ -665,21 +719,22 @@ const LockStep = ({
               type="number"
               min="0"
               step="0.000000000000000001"
-              placeholder="250.0"
               value={amountInput}
               onChange={(event) => setAmountInput(event.target.value)}
             />
           </label>
         </div>
-        <DurationInputs
-          values={durationInputs}
-          onChange={handleLockDurationInputChange}
-          onBlurField={handleLockDurationInputBlur}
-          showPrecision={showLockPrecision}
-          onTogglePrecision={() => setShowLockPrecision((prev) => !prev)}
-          durationSeconds={lockDurationSeconds}
-          unlockPreview={lockUnlockPreview}
-        />
+        {amountInput && Number(amountInput) > 0 && (
+          <DurationInputs
+            values={durationInputs}
+            onChange={handleLockDurationInputChange}
+            onBlurField={handleLockDurationInputBlur}
+            showPrecision={showLockPrecision}
+            onTogglePrecision={() => setShowLockPrecision((prev) => !prev)}
+            durationSeconds={lockDurationSeconds}
+            unlockPreview={lockUnlockPreview}
+          />
+        )}
         {manageError && (
           <div className="inline-error" ref={manageErrorRef}>
             {manageError.text}
@@ -981,22 +1036,23 @@ const BindStep = ({
               type="number"
               min="0"
               step="0.000000000000000001"
-              placeholder="10.0"
               value={transferAmountInput}
               onChange={(event) => setTransferAmountInput(event.target.value)}
               required
             />
           </label>
         </div>
-        <DurationInputs
-          values={transferDurationInputs}
-          onChange={handleTransferDurationInputChange}
-          onBlurField={handleTransferDurationInputBlur}
-          showPrecision={showTransferPrecision}
-          onTogglePrecision={() => setShowTransferPrecision((prev) => !prev)}
-          durationSeconds={transferDurationSeconds}
-          unlockPreview={transferUnlockPreview}
-        />
+        {transferAmountInput && Number(transferAmountInput) > 0 && (
+          <DurationInputs
+            values={transferDurationInputs}
+            onChange={handleTransferDurationInputChange}
+            onBlurField={handleTransferDurationInputBlur}
+            showPrecision={showTransferPrecision}
+            onTogglePrecision={() => setShowTransferPrecision((prev) => !prev)}
+            durationSeconds={transferDurationSeconds}
+            unlockPreview={transferUnlockPreview}
+          />
+        )}
         {transferError && (
           <div className="inline-error" ref={transferErrorRef}>
             {transferError.text}
