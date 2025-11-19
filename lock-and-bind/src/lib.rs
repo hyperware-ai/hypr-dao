@@ -23,10 +23,16 @@ const LOCAL_CHAIN_ID: u64 = 8453;
 const LOCAL_TOKEN_REGISTRY: &str = "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6";
 #[cfg(not(feature = "simulation-mode"))]
 const LOCAL_TOKEN_REGISTRY: &str = "0x0000000000e8d224B902632757d5dbc51a451456";
+
 #[cfg(feature = "simulation-mode")]
 const SIMULATION_OWNER: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
 #[cfg(not(feature = "simulation-mode"))]
 const SIMULATION_OWNER: &str = "0x0000000000000000000000000000000000000000";
+
+#[cfg(feature = "simulation-mode")]
+const MIN_LOCK_DURATION_SECONDS: u64 = 4 * 60;
+#[cfg(not(feature = "simulation-mode"))]
+const MIN_LOCK_DURATION_SECONDS: u64 = 4 * 7 * 24 * 60 * 60;
 const HNS_INDEXER_TIMEOUT_S: u64 = 5;
 const ZERO_NAMEHASH: &str =
     "0x0000000000000000000000000000000000000000000000000000000000000000";
@@ -81,6 +87,7 @@ struct LockStatusPayload {
     error: Option<String>,
     lock_modal_seen: bool,
     chain_id: u64,
+    min_lock_duration_seconds: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -183,6 +190,7 @@ impl AppState {
             error: self.last_error.clone(),
             lock_modal_seen: self.lock_modal_seen,
             chain_id: LOCAL_CHAIN_ID,
+            min_lock_duration_seconds: MIN_LOCK_DURATION_SECONDS,
         }
     }
 
@@ -250,7 +258,7 @@ impl AppState {
 
     fn resolve_owner_address() -> Result<EthAddress, String> {
         let node_name = our().node.clone();
-        let hypermap = hypermap::Hypermap::default(30);
+        let hypermap = hypermap::Hypermap::default(5);
         match hypermap.get(&node_name) {
             Ok((_, owner, _)) => Ok(owner),
             Err(err) => {

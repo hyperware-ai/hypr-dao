@@ -13,14 +13,8 @@ use standard.{address};
         bindings: list<bind-details-view>,
         error: option<string>,
         lock-modal-seen: bool,
-        chain-id: u64
-    }
-
-    record lock-details-view {
-        amount-raw-wei: string,
-        amount-formatted-hypr: string,
-        unlock-timestamp: u64,
-        remaining-seconds: u64
+        chain-id: u64,
+        min-lock-duration-seconds: u64
     }
 
     record bind-details-view {
@@ -35,6 +29,13 @@ use standard.{address};
     record balance-view {
         amount-raw-wei: string,
         amount-formatted-hypr: string
+    }
+
+    record lock-details-view {
+        amount-raw-wei: string,
+        amount-formatted-hypr: string,
+        unlock-timestamp: u64,
+        remaining-seconds: u64
     }
 
     // Function signature for: acknowledge-lock-modal (http)

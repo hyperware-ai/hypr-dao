@@ -32,6 +32,7 @@ export interface LockStatusPayload {
     error: string | null;
     lock_modal_seen: boolean;
     chain_id: number;
+    min_lock_duration_seconds: number;
 }
 
 export interface LockAndBindState {
@@ -39,6 +40,7 @@ export interface LockAndBindState {
   isConnected: boolean;
   ownerAddress: string | null;
   chainId: number | null;
+  minLockDurationSeconds: number | null;
   lockDetails: LockDetailsView | null;
   hyprOwned: BalanceView | null;
   hyprApproved: BalanceView | null;

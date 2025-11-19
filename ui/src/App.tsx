@@ -86,9 +86,14 @@ const transferRegistrationAbi = [
   },
 ] as const;
 
-const MIN_LOCK_DURATION_SECONDS = 4 * 7 * 24 * 60 * 60; // 4 weeks
+const DEFAULT_MIN_LOCK_DURATION_SECONDS = 4 * 7 * 24 * 60 * 60; // 4 weeks
 const MAX_LOCK_DURATION_SECONDS = 4 * 52 * 7 * 24 * 60 * 60; // ~4 years
 const ZERO_NAMEHASH = '0x0000000000000000000000000000000000000000000000000000000000000000' as const;
+const CHAIN_LABELS: Record<number, string> = {
+  [base.id]: 'Base',
+  [anvil.id]: 'Anvil',
+};
+const FALLBACK_CHAIN_ID = anvil.id;
 
 const SECONDS_PER_MINUTE = 60;
 const SECONDS_PER_HOUR = 60 * SECONDS_PER_MINUTE;
@@ -233,13 +238,7 @@ function App() {
     refreshLockStatus,
     clearError,
     acknowledgeLockModal,
-  } = useBindAndLockStore();
-const CHAIN_LABELS: Record<number, string> = {
-  [base.id]: 'Base',
-  [anvil.id]: 'Anvil',
-};
-
-const FALLBACK_CHAIN_ID = anvil.id;
+} = useBindAndLockStore();
 const { address, chain, isConnected: isWalletConnected } = useAccount();
   const showLockInfoModal = (resume?: () => void) => {
     setLockModalResume(() => (resume ? () => resume() : null));
@@ -273,6 +272,8 @@ const { address, chain, isConnected: isWalletConnected } = useAccount();
   const expectedChainName = CHAIN_LABELS[expectedChainId] ?? `Chain ${expectedChainId}`;
   const networkMismatch =
     walletConnected && chain?.id !== undefined && chain.id !== expectedChainId;
+  const minLockDurationSeconds =
+    useBindAndLockStore((state) => state.minLockDurationSeconds) ?? DEFAULT_MIN_LOCK_DURATION_SECONDS;
   const environmentReady = !walletMismatch && !networkMismatch;
   const connectComplete = Boolean(isConnected && nodeId && walletConnected);
   const hyprOwnedWei = hyprOwned?.amount_raw_wei ? BigInt(hyprOwned.amount_raw_wei) : 0n;
@@ -404,6 +405,7 @@ const { address, chain, isConnected: isWalletConnected } = useAccount();
                       targetRegistryAddress={targetRegistryAddress}
                       hasSeenLockModal={lockModalSeen}
                       onRequireLockInfo={(resume) => showLockInfoModal(resume)}
+                      minLockDurationSeconds={minLockDurationSeconds}
                     />
                   )}
 
@@ -417,6 +419,7 @@ const { address, chain, isConnected: isWalletConnected } = useAccount();
                       lockDetails={lockDetails}
                       bindings={bindings}
                       refreshLockStatus={refreshLockStatus}
+                      minLockDurationSeconds={minLockDurationSeconds}
                     />
                   )}
                 </main>
@@ -497,6 +500,7 @@ interface LockStepProps {
   targetRegistryAddress: `0x${string}`;
   hasSeenLockModal: boolean;
   onRequireLockInfo: (resume: () => void) => void;
+  minLockDurationSeconds: number;
 }
 
 const LockStep = ({
@@ -517,6 +521,7 @@ const LockStep = ({
   targetRegistryAddress,
   hasSeenLockModal,
   onRequireLockInfo,
+  minLockDurationSeconds,
 }: LockStepProps) => {
   const [amountInput, setAmountInput] = useState('');
   const [durationInputs, setDurationInputs] = useState<DurationInputValues>(createDefaultDurationInputs);
@@ -558,9 +563,10 @@ const LockStep = ({
     [durationParts],
   );
   const hasAllowance = tokeregistryAllowance && tokeregistryAllowance.amount_raw_wei !== '0';
+  const minDurationSecondsBigInt = BigInt(minLockDurationSeconds);
   const lockEndDateMin = useMemo(
-    () => new Date((nowSeconds + MIN_LOCK_DURATION_SECONDS) * 1000),
-    [nowSeconds],
+    () => new Date((nowSeconds + minLockDurationSeconds) * 1000),
+    [nowSeconds, minLockDurationSeconds],
   );
   const lockEndDateMax = useMemo(
     () => new Date((nowSeconds + MAX_LOCK_DURATION_SECONDS) * 1000),
@@ -819,8 +825,8 @@ const LockStep = ({
       pushManageError('Enter a positive duration.');
       return;
     }
-    if (selectedLockDurationSeconds < BigInt(MIN_LOCK_DURATION_SECONDS)) {
-      pushManageError(`Duration must be at least ${formatDurationSeconds(MIN_LOCK_DURATION_SECONDS)}.`);
+    if (selectedLockDurationSeconds < minDurationSecondsBigInt) {
+      pushManageError(`Duration must be at least ${formatDurationSeconds(minLockDurationSeconds)}.`);
       return;
     }
     if (selectedLockDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
@@ -839,18 +845,16 @@ const LockStep = ({
         amountWei,
         selectedLockDurationSeconds,
       );
-      if (!requiredDuration) {
-        pushManageError('Unable to compute required duration. Adjust amount or duration.');
-        return;
-      }
+    if (!requiredDuration) {
+      pushManageError('The size and duration of your existing lock restricts you from achieving your new desired lock duration. Consider either committing more HYPR or choosing a target duration closer to the existing lock duration.');
+      return;
+    }
       if (
-        requiredDuration < BigInt(MIN_LOCK_DURATION_SECONDS) ||
+        requiredDuration < minDurationSecondsBigInt ||
         requiredDuration > BigInt(MAX_LOCK_DURATION_SECONDS)
       ) {
         pushManageError(
-          `Computed duration must be between ${formatDurationSeconds(
-            MIN_LOCK_DURATION_SECONDS,
-          )} and ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`,
+          'The size and duration of your existing lock restricts you from achieving your new desired lock duration. Consider either committing more HYPR or choosing a target duration closer to the existing lock duration.',
         );
         return;
       }
@@ -1098,6 +1102,7 @@ interface BindStepProps {
   lockDetails: LockDetailsView | null;
   bindings: BindingView[];
   refreshLockStatus: () => Promise<void>;
+  minLockDurationSeconds: number;
 }
 
 const BindStep = ({
@@ -1109,6 +1114,7 @@ const BindStep = ({
   lockDetails,
   bindings,
   refreshLockStatus,
+  minLockDurationSeconds,
 }: BindStepProps) => {
   const [srcNameInput, setSrcNameInput] = useState('');
   const [dstNameInput, setDstNameInput] = useState('');
@@ -1168,9 +1174,10 @@ const BindStep = ({
   );
   const transferNowSecondsRef = useRef(Math.floor(Date.now() / 1000));
   const transferNowSeconds = transferNowSecondsRef.current;
+  const minDurationSecondsBigInt = BigInt(minLockDurationSeconds);
   const transferEndDateMin = useMemo(
-    () => new Date((transferNowSeconds + MIN_LOCK_DURATION_SECONDS) * 1000),
-    [transferNowSeconds],
+    () => new Date((transferNowSeconds + minLockDurationSeconds) * 1000),
+    [transferNowSeconds, minLockDurationSeconds],
   );
   const transferEndDateMax = useMemo(
     () => new Date((transferNowSeconds + MAX_LOCK_DURATION_SECONDS) * 1000),
@@ -1355,8 +1362,8 @@ const BindStep = ({
       pushTransferError('Enter a positive duration.');
       return;
     }
-    if (selectedTransferDurationSeconds < BigInt(MIN_LOCK_DURATION_SECONDS)) {
-      pushTransferError(`Duration must be at least ${formatDurationSeconds(MIN_LOCK_DURATION_SECONDS)}.`);
+    if (selectedTransferDurationSeconds < minDurationSecondsBigInt) {
+      pushTransferError(`Duration must be at least ${formatDurationSeconds(minLockDurationSeconds)}.`);
       return;
     }
     if (selectedTransferDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
