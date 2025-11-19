@@ -94,6 +94,7 @@ struct LockStatusPayload {
 struct AppState {
     node_id: String,
     owner_address: Option<String>,
+    owner_resolution_attempted: bool,
     lock_details: Option<LockDetailsView>,
     hypr_owned: Option<BalanceView>,
     hypr_approved: Option<BalanceView>,
@@ -110,6 +111,7 @@ impl Default for AppState {
         Self {
             node_id: String::new(),
             owner_address: None,
+            owner_resolution_attempted: false,
             lock_details: None,
             hypr_owned: None,
             hypr_approved: None,
@@ -195,7 +197,15 @@ impl AppState {
     }
 
     fn refresh_lock_state(&mut self) -> Result<(), String> {
-        let owner = Self::resolve_owner_address()?;
+        let owner = match self.owner_address.clone() {
+            Some(addr) if !addr.is_empty() => EthAddress::from_str(&addr)
+                .map_err(|_| "cached owner address invalid".to_string())?,
+            _ => {
+                let resolved = Self::resolve_owner_address()?;
+                self.owner_address = Some(resolved.to_string());
+                resolved
+            }
+        };
         let bindings = Self::bindings_client()?;
         let details = bindings
             .get_lock_details(owner)

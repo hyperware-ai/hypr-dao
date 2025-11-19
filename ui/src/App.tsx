@@ -56,6 +56,13 @@ const tokenRegistryAbi = [
     ],
     outputs: [],
   },
+  {
+    type: 'function',
+    name: 'withdraw',
+    stateMutability: 'nonpayable',
+    inputs: [],
+    outputs: [{ name: '', type: 'bool' }],
+  },
 ] as const;
 
 const erc20ApproveAbi = [
@@ -307,6 +314,15 @@ const { address, chain, isConnected: isWalletConnected } = useAccount();
       void fetchLockStatus();
     }
   }, [connectComplete, fetchLockStatus]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (connectComplete && environmentReady) {
+        void refreshLockStatus();
+      }
+    }, 90_000);
+    return () => clearInterval(id);
+  }, [connectComplete, environmentReady, refreshLockStatus]);
 
   const canAccessStep = (id: StepId) => {
     if (id === 'lock') {
@@ -577,7 +593,7 @@ const LockStep = ({
       setLockEndDateInput(lockEndDateMin);
     }
   }, [lockDurationMode, lockEndDateInput, lockEndDateMin]);
-  const lockEndDateDurationSeconds = secondsUntilDate(lockEndDateInput, nowSeconds);
+  const lockEndDateDurationSeconds = secondsUntilDate(lockEndDateInput, Math.floor(Date.now() / 1000));
   const selectedLockDurationSeconds =
     lockDurationMode === 'duration'
       ? lockDurationSecondsFromInputs
@@ -607,6 +623,13 @@ const LockStep = ({
   } = useWriteContract();
 
   const {
+    data: withdrawTxHash,
+    error: withdrawError,
+    isPending: isWithdrawPending,
+    writeContract: writeWithdrawContract,
+  } = useWriteContract();
+
+  const {
     isLoading: isAllowanceConfirming,
     isSuccess: isAllowanceConfirmed,
   } = useWaitForTransactionReceipt({
@@ -618,6 +641,13 @@ const LockStep = ({
     isSuccess: isManageConfirmed,
   } = useWaitForTransactionReceipt({
     hash: manageTxHash,
+  });
+
+  const {
+    isLoading: isWithdrawConfirming,
+    isSuccess: isWithdrawConfirmed,
+  } = useWaitForTransactionReceipt({
+    hash: withdrawTxHash,
   });
 
   const pushManageError = useCallback(
@@ -640,6 +670,12 @@ const LockStep = ({
       pushManageError(getErrorMessage(manageWriteError));
     }
   }, [manageWriteError, pushManageError]);
+
+  useEffect(() => {
+    if (withdrawError) {
+      pushManageError(getErrorMessage(withdrawError));
+    }
+  }, [withdrawError, pushManageError]);
 
   useEffect(() => {
     if (manageError) {
@@ -670,6 +706,18 @@ const LockStep = ({
       setManageSuccessHash(manageTxHash);
     }
   }, [isManageConfirmed, manageTxHash]);
+
+  useEffect(() => {
+    if (isWithdrawConfirmed) {
+      void refreshLockStatus();
+    }
+  }, [isWithdrawConfirmed, refreshLockStatus]);
+
+  useEffect(() => {
+    if (isWithdrawConfirmed && withdrawTxHash) {
+      setManageSuccessHash(withdrawTxHash);
+    }
+  }, [isWithdrawConfirmed, withdrawTxHash]);
 
   useEffect(() => {
     if (manageSuccessHash) {
@@ -884,6 +932,22 @@ const LockStep = ({
     await triggerLock({ amount: amountWei, duration: submittedDurationSeconds });
   };
 
+  const handleWithdraw = async () => {
+    if (!walletConnected || !walletAddress) {
+      pushManageError('Connect a wallet to withdraw.');
+      return;
+    }
+    try {
+      await writeWithdrawContract({
+        address: targetRegistryAddress,
+        abi: tokenRegistryAbi,
+        functionName: 'withdraw',
+      });
+    } catch (err) {
+      pushManageError(getErrorMessage(err));
+    }
+  };
+
   const handleManageLock = async (event: FormEvent) => {
     event.preventDefault();
 
@@ -991,14 +1055,30 @@ const LockStep = ({
               <span className="lock-card-label">Locked amount</span>
               <span className="lock-card-value">{lockDetails.amount_formatted_hypr}</span>
             </div>
-            <div className="lock-card">
+            <div
+              className={`lock-card${
+                lockDetails.remaining_seconds === 0 ? ' expired-card' : ''
+              }`}
+            >
               <span className="lock-card-label">Unlock timestamp</span>
               <span className="lock-card-value">{formatTimestamp(lockDetails.unlock_timestamp)}</span>
               <span className="lock-card-sub">
                 {lockDetails.remaining_seconds === Number.MAX_SAFE_INTEGER
                   ? 'Unknown remaining time'
-                  : `${formatSeconds(lockDetails.remaining_seconds)} remaining`}
+                  : lockDetails.remaining_seconds === 0
+                    ? 'Expired'
+                    : `${formatSeconds(lockDetails.remaining_seconds)} remaining`}
               </span>
+              {lockDetails.remaining_seconds === 0 && (
+                <button
+                  type="button"
+                  className="secondary-button warning-button"
+                  disabled={isWithdrawPending || isWithdrawConfirming}
+                  onClick={handleWithdraw}
+                >
+                  {isWithdrawPending || isWithdrawConfirming ? <span className="spinner" /> : 'Withdraw'}
+                </button>
+              )}
             </div>
           </div>
         ) : (
@@ -1427,13 +1507,18 @@ const BindStep = ({
             <div className="lock-card-sub">No bindings detected</div>
           ) : (
             <div className="bindings-list">
-              {bindings.map((binding) => (
-                <div className="binding-row" key={binding.namehash}>
-                  <div className="binding-name">{binding.name ?? 'Unknown name'}</div>
-                  <div className="binding-amount">{binding.amount_formatted_hypr}</div>
-                  <div className="binding-sub">Unlocks {formatTimestamp(binding.unlock_timestamp)}</div>
-                </div>
-              ))}
+              {bindings.map((binding) => {
+                const expired = (binding.remaining_seconds ?? 0) === 0;
+                return (
+                  <div className={`binding-row${expired ? ' expired-card' : ''}`} key={binding.namehash}>
+                    <div className="binding-name">{binding.name ?? 'Unknown name'}</div>
+                    <div className="binding-amount">{binding.amount_formatted_hypr}</div>
+                    <div className="binding-sub">
+                      {expired ? 'Expired' : `Unlocks ${formatTimestamp(binding.unlock_timestamp)}`}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

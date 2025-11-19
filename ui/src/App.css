@@ -656,3 +656,7 @@ input[type='number'] {
 .modal-card ol {
   padding-left: 1.25rem;
 }
+.expired-card {
+  background: rgba(255, 165, 0, 0.15);
+  border: 1px solid rgba(255, 165, 0, 0.6);
+}
