@@ -295,6 +295,12 @@
   background: rgba(81, 207, 102, 0.15);
 }
 
+.modal-actions .secondary-button.ghost.centered {
+  align-self: center;
+  width: 100%;
+  margin-bottom: 0.5rem;
+}
+
 .hypr-required-card {
   margin-top: 0.75rem;
   border: 1px solid rgba(255, 149, 0, 0.6);

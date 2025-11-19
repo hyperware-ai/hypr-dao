@@ -18,6 +18,8 @@ const LOCAL_CHAIN_ID: u64 = 31337;
 const LOCAL_TOKEN_REGISTRY: &str = "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6";
 const SIMULATION_OWNER: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
 const HNS_INDEXER_TIMEOUT_S: u64 = 5;
+const ZERO_NAMEHASH: &str =
+    "0x0000000000000000000000000000000000000000000000000000000000000000";
 
 mod hns_indexer_api {
     wit_bindgen::generate!({
@@ -144,6 +146,14 @@ impl AppState {
     async fn acknowledge_lock_modal(&mut self) -> Result<(), String> {
         self.lock_modal_seen = true;
         Ok(())
+    }
+
+    #[http]
+    async fn lookup_name(&self, namehash: String) -> Result<Option<String>, String> {
+        if namehash == ZERO_NAMEHASH {
+            return Ok(Some("".to_string()));
+        }
+        Ok(resolve_name_for_hash(&namehash))
     }
 }
 

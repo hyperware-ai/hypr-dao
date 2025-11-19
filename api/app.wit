@@ -50,6 +50,14 @@ use standard.{address};
         returning: result<lock-status-payload, string>
     }
 
+    // Function signature for: lookup-name (http)
+    // HTTP: POST /api/lookup-name
+    record lookup-name-signature-http {
+        target: string,
+        namehash: string,
+        returning: result<option<string>, string>
+    }
+
     // Function signature for: refresh-lock-status (http)
     // HTTP: POST /api/refresh-lock-status
     record refresh-lock-status-signature-http {

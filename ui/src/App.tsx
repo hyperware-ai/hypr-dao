@@ -8,6 +8,7 @@ import { concatHex, keccak256, parseEther, stringToBytes } from 'viem';
 import './App.css';
 import { useBindAndLockStore } from './store/lock_and_bind';
 import type { BalanceView, BindingView, LockDetailsView } from './types/lock_and_bind';
+import { App as CallerApp } from '#caller-utils';
 
 type StepId = 'lock' | 'bind';
 type StepIcon = 'check' | 'lock' | 'chain';
@@ -28,13 +29,13 @@ const steps: StepConfig[] = [
   {
     id: 'lock',
     title: 'Lock',
-    description: 'Approve HYPR and manage lock duration and amount.',
+    description: 'Commit some or all of your HYPR to the Registry to enable binding.',
     icon: 'lock',
   },
   {
     id: 'bind',
     title: 'Bind',
-    description: 'Manage name bindings and distribute HYPR across registrations.',
+    description: 'Distribute locked HYPR to named bindings.',
     icon: 'chain',
   },
 ];
@@ -402,12 +403,16 @@ function App() {
             <p>Locking HYPR can involve two blockchain transactions:</p>
             <ol>
               <li><strong>Approve HYPR:</strong> Authorizes the TokenRegistry to use the amount you specify.</li>
-              <li><strong>Lock HYPR:</strong> Moves the approved HYPR into the staking contract for the duration you choose.</li>
+              <li><strong>Lock HYPR:</strong> Moves the approved HYPR into the Registry contract for the duration you choose (between 4 weeks and 4 years).</li>
             </ol>
-            <p>You only need to approve additional HYPR when your existing allowance is too low.</p>
+            <p>
+              You may only need to confirm one transaction if you have previously approved sufficient transfer rights to the Registry contract. Under normal circumstances, you will need to approve the amount of HYPR you are attempting to lock (transaction #1) and tell the Registry contract to take possession of it (transaction #2).
+              <strong> After these transactions, the HYPR will be kept under the control of the Registry contract for the duration of the lock.</strong>&nbsp;
+              Double-check your amount and duration before confirming the transactions.
+            </p>
             <div className="modal-actions">
               <button
-                className="secondary-button ghost"
+                className="secondary-button ghost centered"
                 onClick={() => {
                   dismissLockInfoModal();
                 }}
@@ -956,7 +961,7 @@ const LockStep = ({
         ) : (
           <div className="lock-empty">
             <h3>No lock detected</h3>
-            <p>Lock HYPR to secure your node reservations. Once a lock is active it will appear here.</p>
+            <p>Lock HYPR to enable binding. Once HYPR has been locked it will appear here.</p>
           </div>
         )}
       </div>
@@ -1151,6 +1156,31 @@ const BindStep = ({
     return formatTimestamp(transferNowSeconds + Number(selectedTransferDurationSeconds));
   }, [selectedTransferDurationSeconds, transferNowSeconds]);
 
+  const destinationHash = useMemo(() => resolveNamehash(dstNameInput), [dstNameInput]);
+  const destinationHasActiveBinding = useMemo(() => {
+    if (destinationHash === ZERO_NAMEHASH) {
+      return false;
+    }
+    return bindings.some(
+      (binding) =>
+        binding.namehash.toLowerCase() === destinationHash.toLowerCase() &&
+        (binding.remaining_seconds ?? 0) > 0,
+    );
+  }, [bindings, destinationHash]);
+  const transferAmountProvided = transferAmountInput !== '';
+  const transferAmountValue = transferAmountProvided ? Number(transferAmountInput) : NaN;
+  const transferAmountIsValid = transferAmountProvided && Number.isFinite(transferAmountValue);
+  const shouldShowTransferDuration =
+    transferAmountIsValid && (transferAmountValue > 0 || destinationHasActiveBinding);
+  const bindButtonDisabled =
+    !walletConnected ||
+    isTransferPending ||
+    isTransferConfirming ||
+    !hasTransferValidEndDate ||
+    !transferAmountProvided ||
+    !transferAmountIsValid ||
+    (transferAmountValue <= 0 && !destinationHasActiveBinding);
+
   const pushTransferError = (message: string) => {
     transferErrorIdRef.current += 1;
     setTransferError({ id: transferErrorIdRef.current, text: message });
@@ -1229,12 +1259,40 @@ const BindStep = ({
       return;
     }
 
-    if (!transferAmountInput || Number(transferAmountInput) <= 0) {
-      pushTransferError('Enter a positive HYPR amount to transfer.');
+    if (!transferAmountInput) {
+      pushTransferError('Enter an amount to bind.');
+      return;
+    }
+    const amountNumber = Number(transferAmountInput);
+    if (!Number.isFinite(amountNumber) || amountNumber < 0) {
+      pushTransferError('Enter a valid HYPR amount to bind.');
+      return;
+    }
+    if (amountNumber === 0 && !destinationHasActiveBinding) {
+      pushTransferError('Zero HYPR can only be bound to an existing active binding.');
       return;
     }
 
+    const srcHash = resolveNamehash(srcNameInput);
     const maxAmountWei = parseEther(transferAmountInput);
+    if (srcHash !== ZERO_NAMEHASH) {
+      const sourceBinding = bindings.find(
+        (binding) => binding.namehash.toLowerCase() === srcHash.toLowerCase(),
+      );
+      if (!sourceBinding) {
+        pushTransferError('Source binding is unknown.');
+        return;
+      }
+      if ((sourceBinding.remaining_seconds ?? 0) > 0) {
+        pushTransferError('Source binding has not expired yet.');
+        return;
+      }
+      const sourceAmountWei = BigInt(sourceBinding.amount_raw_wei);
+      if (maxAmountWei > sourceAmountWei) {
+        pushTransferError('Amount exceeds HYPR available in the expired source binding.');
+        return;
+      }
+    }
     if (availableToBind) {
       const availableWei = BigInt(availableToBind.amount_raw_wei);
       if (maxAmountWei > availableWei) {
@@ -1272,6 +1330,17 @@ const BindStep = ({
       const dstHash = resolveNamehash(dstNameInput);
       if (dstHash === ZERO_NAMEHASH) {
         pushTransferError('Destination cannot be the default registration.');
+        return;
+      }
+
+      try {
+        const resolvedDestination = await CallerApp.lookup_name(dstHash);
+        if (!resolvedDestination || resolvedDestination.trim() === '') {
+          pushTransferError('Destination name is unknown. Please choose a registered name.');
+          return;
+        }
+      } catch (lookupError) {
+        pushTransferError('Unable to validate destination name. Please try again.');
         return;
       }
 
@@ -1328,7 +1397,7 @@ const BindStep = ({
         <div className="form-header">
           <div>
             <h3>Bind HYPR</h3>
-            <p>Bind HYPR from your unbound pool (or from expired bindings) to a named destination.</p>
+            <p>Bind HYPR from your available balance (or from expired bindings) to a named destination.</p>
           </div>
         </div>
         <div className="input-grid">
@@ -1363,11 +1432,11 @@ const BindStep = ({
             />
           </label>
         </div>
-        {transferAmountInput && Number(transferAmountInput) > 0 && (
-          <DurationInputs
-            values={transferDurationInputs}
-            onChange={handleTransferDurationInputChange}
-            onBlurField={handleTransferDurationInputBlur}
+    {shouldShowTransferDuration && (
+      <DurationInputs
+        values={transferDurationInputs}
+        onChange={handleTransferDurationInputChange}
+        onBlurField={handleTransferDurationInputBlur}
             showPrecision={showTransferPrecision}
             onTogglePrecision={() => setShowTransferPrecision((prev) => !prev)}
             durationSeconds={selectedTransferDurationSeconds}
@@ -1391,13 +1460,7 @@ const BindStep = ({
           </div>
         )}
         <div className="form-actions">
-          <button
-            type="submit"
-            className="secondary-button"
-            disabled={
-              !walletConnected || isTransferPending || isTransferConfirming || !hasTransferValidEndDate
-            }
-          >
+          <button type="submit" className="secondary-button" disabled={bindButtonDisabled}>
             {isTransferPending || isTransferConfirming ? <span className="spinner" /> : 'Bind'}
           </button>
         </div>
@@ -1565,7 +1628,7 @@ const DurationInputs = ({
         </label>
       )}
       <div className="duration-summary">
-        {showUnlockPreview && !computedUnlockLabel && <span>Unlock preview: {unlockText}</span>}
+        {showUnlockPreview && !computedUnlockLabel && <span>Unlock timestamp: {unlockText}</span>}
         {!computedDurationLabel && <span>Duration total: {durationLabel}</span>}
         {computedUnlockLabel && <span>Requested final unlock: {computedUnlockLabel}</span>}
         {computedDurationLabel && <span>Requested final duration: {computedDurationLabel}</span>}
