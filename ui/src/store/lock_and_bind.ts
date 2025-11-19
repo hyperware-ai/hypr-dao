@@ -18,6 +18,7 @@ export const useBindAndLockStore = create<LockAndBindStore>((set, get) => ({
   nodeId: null,
   isConnected: false,
   ownerAddress: null,
+  chainId: null,
   lockDetails: null,
   hyprOwned: null,
   hyprApproved: null,
@@ -98,6 +99,7 @@ function applyStatus(status: LockStatusPayload, set: (updater: Partial<LockAndBi
     lastError: status.error,
     isLoading: false,
     lockModalSeen: status.lock_modal_seen,
+    chainId: status.chain_id,
   });
 }
 

@@ -20,23 +20,25 @@ export interface BindingView {
 }
 
 export interface LockStatusPayload {
-  node_id: string;
-  owner_address: string | null;
+    node_id: string;
+    owner_address: string | null;
   lock_details: LockDetailsView | null;
   hypr_owned: BalanceView | null;
   hypr_approved: BalanceView | null;
   tokeregistry_allowance: BalanceView | null;
   hypr_token_address: string | null;
   available_to_bind: BalanceView | null;
-  bindings: BindingView[];
-  error: string | null;
-  lock_modal_seen: boolean;
+    bindings: BindingView[];
+    error: string | null;
+    lock_modal_seen: boolean;
+    chain_id: number;
 }
 
 export interface LockAndBindState {
   nodeId: string | null;
   isConnected: boolean;
   ownerAddress: string | null;
+  chainId: number | null;
   lockDetails: LockDetailsView | null;
   hyprOwned: BalanceView | null;
   hyprApproved: BalanceView | null;

@@ -24,6 +24,7 @@ version = "1.0"
 
 [features]
 caller-utils = ["lock_and_bind_caller_utils"]
+simulation-mode = []
 
 [lib]
 crate-type = ["cdylib"]

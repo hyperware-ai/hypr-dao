@@ -234,8 +234,13 @@ function App() {
     clearError,
     acknowledgeLockModal,
   } = useBindAndLockStore();
-  const { address, chain, isConnected: isWalletConnected } = useAccount();
+const CHAIN_LABELS: Record<number, string> = {
+  [base.id]: 'Base',
+  [anvil.id]: 'Anvil',
+};
 
+const FALLBACK_CHAIN_ID = anvil.id;
+const { address, chain, isConnected: isWalletConnected } = useAccount();
   const showLockInfoModal = (resume?: () => void) => {
     setLockModalResume(() => (resume ? () => resume() : null));
     setShowLockModal(true);
@@ -257,14 +262,30 @@ function App() {
   }, [initialize]);
 
   const walletConnected = Boolean(isWalletConnected && address);
+  const normalizedOwnerAddress = ownerAddress?.toLowerCase() ?? null;
+  const normalizedWalletAddress = address?.toLowerCase() ?? null;
+  const walletMismatch =
+    walletConnected &&
+    Boolean(normalizedOwnerAddress) &&
+    Boolean(normalizedWalletAddress) &&
+    normalizedOwnerAddress !== normalizedWalletAddress;
+  const expectedChainId = useBindAndLockStore((state) => state.chainId) ?? FALLBACK_CHAIN_ID;
+  const expectedChainName = CHAIN_LABELS[expectedChainId] ?? `Chain ${expectedChainId}`;
+  const networkMismatch =
+    walletConnected && chain?.id !== undefined && chain.id !== expectedChainId;
+  const environmentReady = !walletMismatch && !networkMismatch;
   const connectComplete = Boolean(isConnected && nodeId && walletConnected);
   const hyprOwnedWei = hyprOwned?.amount_raw_wei ? BigInt(hyprOwned.amount_raw_wei) : 0n;
   const lockedWei = lockDetails?.amount_raw_wei ? BigInt(lockDetails.amount_raw_wei) : 0n;
   const hasBalanceData = hyprOwned !== null;
   const hasHyprHoldings = hyprOwnedWei > 0n || lockedWei > 0n;
   const showHyprRequiredNotice =
-    walletConnected && connectComplete && hasBalanceData && !hasHyprHoldings;
-  const showContent = connectComplete && !showHyprRequiredNotice;
+    walletConnected &&
+    connectComplete &&
+    environmentReady &&
+    hasBalanceData &&
+    !hasHyprHoldings;
+  const showContent = connectComplete && !showHyprRequiredNotice && environmentReady;
   const lockTabEnabled = showContent;
   const bindTabEnabled =
     showContent &&
@@ -318,6 +339,24 @@ function App() {
               <div className="hypr-required-card">
                 <h3>HYPR required</h3>
                 <p>This account must possess a HYPR balance to use this application.</p>
+              </div>
+            )}
+
+            {connectComplete && !environmentReady && (
+              <div className="warning-card">
+                <h3>Connection required</h3>
+                {walletMismatch && (
+                  <p>
+                    Connect wallet <code>{ownerAddress}</code> to manage this node owner's HYPR locks and bindings. You are currently
+                    connected as <code>{address}</code>.
+                  </p>
+                )}
+                {networkMismatch && (
+                  <p>
+                    Switch your wallet network to {expectedChainName} (chain ID {expectedChainId}) to continue. You are on{' '}
+                    {chain ? chain.name : 'an unknown network'}.
+                  </p>
+                )}
               </div>
             )}
 
