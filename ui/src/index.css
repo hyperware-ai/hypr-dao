@@ -8,6 +8,7 @@
   --surface: #1a1a1a;
   --text-primary: rgba(255, 255, 255, 0.87);
   --text-secondary: rgba(255, 255, 255, 0.6);
+  --text-tertiary: rgba(0, 0, 0, 0.2);
   --border-color: rgba(255, 255, 255, 0.1);
   --error-color: #ff6b6b;
   --success-color: #51cf66;

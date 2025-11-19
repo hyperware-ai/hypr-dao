@@ -332,16 +332,14 @@ function App() {
                 <div className="step-info">
                   <div className="step-heading-row">
                     <h2 className="step-heading">{activeStepTitle}</h2>
-                    {activeStep === 'lock' && (
-                      <button
-                        type="button"
-                        className="refresh-inline-button"
-                        disabled={isLoading}
-                        onClick={refreshLockStatus}
-                      >
-                        {isLoading ? <span className="spinner" /> : 'Refresh values'}
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      className="refresh-inline-button"
+                      disabled={isLoading}
+                      onClick={refreshLockStatus}
+                    >
+                      {isLoading ? <span className="spinner" /> : 'Refresh values'}
+                    </button>
                   </div>
                   <p className="step-description">{stepDescription}</p>
                 </div>
@@ -376,6 +374,7 @@ function App() {
                       walletAddress={address}
                       targetRegistryAddress={targetRegistryAddress}
                       availableToBind={availableToBind}
+                      lockDetails={lockDetails}
                       bindings={bindings}
                       refreshLockStatus={refreshLockStatus}
                     />
@@ -1052,6 +1051,7 @@ interface BindStepProps {
   walletAddress?: `0x${string}`;
   targetRegistryAddress: `0x${string}`;
   availableToBind: BalanceView | null;
+  lockDetails: LockDetailsView | null;
   bindings: BindingView[];
   refreshLockStatus: () => Promise<void>;
 }
@@ -1062,6 +1062,7 @@ const BindStep = ({
   walletAddress,
   targetRegistryAddress,
   availableToBind,
+  lockDetails,
   bindings,
   refreshLockStatus,
 }: BindStepProps) => {
@@ -1285,85 +1286,77 @@ const BindStep = ({
     }
   };
 
+  const maxBindingExpiry = lockDetails
+    ? formatTimestamp(lockDetails.unlock_timestamp)
+    : 'No lock detected';
+  const maxBindingSub = lockDetails
+    ? lockDetails.remaining_seconds === Number.MAX_SAFE_INTEGER
+      ? 'Unknown remaining time'
+      : `${formatSeconds(lockDetails.remaining_seconds)} remaining`
+    : 'Lock HYPR to enable max expiry';
+
   return (
     <section className="step-card lock-step">
-      <div className="lock-header">
-        <div>
-          <h2>Manage bindings</h2>
-          <p className="lock-subtitle">View current registrations and bind HYPR to new names.</p>
-        </div>
-        <button type="button" className="secondary-button" onClick={() => void refreshLockStatus()}>
-          Refresh
-        </button>
-      </div>
-
       <div className="lock-grid">
-        <LockMetric
-          label="HYPR available to bind"
-          value={availableToBind?.amount_formatted_hypr ?? '0 HYPR'}
-        />
-        <LockMetric label="Active bindings" value={bindings.length.toString()} />
-      </div>
-
-      <div className="lock-detail-panel">
-        {bindings.length === 0 ? (
-          <div className="lock-empty">
-            <h3>No bindings detected</h3>
-            <p>Bind HYPR to a namehash to kick off registration transfers.</p>
-          </div>
-        ) : (
-          bindings.map((binding) => (
-            <div className="lock-detail" key={binding.namehash}>
-              <span className="lock-detail-label">{binding.name ?? 'Unknown name'}</span>
-              <span className="lock-detail-value">{binding.amount_formatted_hypr}</span>
-              <span className="lock-detail-sub">Unlocks {formatTimestamp(binding.unlock_timestamp)}</span>
+        <div className="lock-card">
+          <div className="lock-card-label">HYPR available to bind</div>
+          <div className="lock-card-value">{availableToBind?.amount_formatted_hypr ?? '0 HYPR'}</div>
+          <div className="lock-card-divider" />
+          <div className="lock-card-label">Max binding expiry date</div>
+          <div className="lock-card-value">{maxBindingExpiry}</div>
+          <div className="lock-card-sub">{maxBindingSub}</div>
+        </div>
+        <div className="lock-card">
+          <div className="lock-card-label">Bindings</div>
+          {bindings.length === 0 ? (
+            <div className="lock-card-sub">No bindings detected</div>
+          ) : (
+            <div className="bindings-list">
+              {bindings.map((binding) => (
+                <div className="binding-row" key={binding.namehash}>
+                  <div className="binding-name">{binding.name ?? 'Unknown name'}</div>
+                  <div className="binding-amount">{binding.amount_formatted_hypr}</div>
+                  <div className="binding-sub">Unlocks {formatTimestamp(binding.unlock_timestamp)}</div>
+                </div>
+              ))}
             </div>
-          ))
-        )}
+          )}
+        </div>
       </div>
 
       <form className="lock-form" onSubmit={handleTransfer}>
         <div className="form-header">
           <div>
-            <h3>Transfer registration</h3>
-            <p>Move HYPR from the default pool to a destination namehash.</p>
+            <h3>Bind HYPR</h3>
+            <p>Bind HYPR from your unbound pool (or from expired bindings) to a named destination.</p>
           </div>
-          <button
-            type="submit"
-            className="secondary-button"
-            disabled={
-              !walletConnected || isTransferPending || isTransferConfirming || !hasTransferValidEndDate
-            }
-          >
-            {isTransferPending || isTransferConfirming ? <span className="spinner" /> : 'Bind'}
-          </button>
         </div>
         <div className="input-grid">
           <label className="input-field">
-            <span>Source name</span>
-            <input
-              type="text"
-              placeholder="optional.name.eth"
-              value={srcNameInput}
-              onChange={(event) => setSrcNameInput(event.target.value)}
-            />
+              <span>Source name</span>
+              <input
+                type="text"
+                placeholder="optional.expired.bind.os"
+                value={srcNameInput}
+                onChange={(event) => setSrcNameInput(event.target.value)}
+              />
           </label>
           <label className="input-field">
-            <span>Destination name</span>
-            <input
-              type="text"
-              placeholder="example.name.eth"
-              value={dstNameInput}
-              onChange={(event) => setDstNameInput(event.target.value)}
-              required
-            />
-          </label>
-          <label className="input-field">
-            <span>HYPR amount</span>
-            <input
-              type="number"
-              min="0"
-              step="0.000000000000000001"
+              <span>Destination name</span>
+              <input
+                type="text"
+                placeholder="example.name.os"
+                value={dstNameInput}
+                onChange={(event) => setDstNameInput(event.target.value)}
+                required
+              />
+            </label>
+            <label className="input-field">
+              <span>Amount (HYPR)</span>
+              <input
+                type="number"
+                min="0"
+                step="0.000000000000000001"
               value={transferAmountInput}
               onChange={(event) => setTransferAmountInput(event.target.value)}
               required
@@ -1397,6 +1390,17 @@ const BindStep = ({
             Binding updated! Tx {shortHash(transferSuccessHash)}
           </div>
         )}
+        <div className="form-actions">
+          <button
+            type="submit"
+            className="secondary-button"
+            disabled={
+              !walletConnected || isTransferPending || isTransferConfirming || !hasTransferValidEndDate
+            }
+          >
+            {isTransferPending || isTransferConfirming ? <span className="spinner" /> : 'Bind'}
+          </button>
+        </div>
       </form>
     </section>
   );
