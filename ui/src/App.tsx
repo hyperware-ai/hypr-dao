@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
@@ -115,7 +115,7 @@ const DURATION_LABELS: Record<DurationField, string> = {
   seconds: 'Seconds',
 };
 
-const createDefaultDurationInputs = (): DurationInputValues => ({
+const DURATION_INPUT_DEFAULTS: DurationInputValues = {
   years: '0',
   months: '1',
   weeks: '0',
@@ -123,6 +123,10 @@ const createDefaultDurationInputs = (): DurationInputValues => ({
   hours: '0',
   minutes: '0',
   seconds: '0',
+};
+
+const createDefaultDurationInputs = (): DurationInputValues => ({
+  ...DURATION_INPUT_DEFAULTS,
 });
 
 const inputsToDurationParts = (inputs: DurationInputValues): DurationParts => ({
@@ -207,6 +211,7 @@ const calculateRequiredAdditionalDuration = (
 function App() {
   const [activeStep, setActiveStep] = useState<StepId>('lock');
   const [showLockModal, setShowLockModal] = useState(false);
+  const [lockModalResume, setLockModalResume] = useState<(() => void) | null>(null);
   const {
     nodeId,
     isConnected,
@@ -230,8 +235,14 @@ function App() {
   } = useBindAndLockStore();
   const { address, chain, isConnected: isWalletConnected } = useAccount();
 
-  const showLockInfoModal = () => setShowLockModal(true);
-  const dismissLockInfoModal = () => setShowLockModal(false);
+  const showLockInfoModal = (resume?: () => void) => {
+    setLockModalResume(() => (resume ? () => resume() : null));
+    setShowLockModal(true);
+  };
+  const dismissLockInfoModal = () => {
+    setShowLockModal(false);
+    setLockModalResume(null);
+  };
 
   const targetRegistryAddress = useMemo(() => {
     if (chain?.id && TOKEN_REGISTRY_ADDRESSES[chain.id]) {
@@ -354,7 +365,7 @@ function App() {
                       walletAddress={address}
                       targetRegistryAddress={targetRegistryAddress}
                       hasSeenLockModal={lockModalSeen}
-                      onRequireLockInfo={showLockInfoModal}
+                      onRequireLockInfo={(resume) => showLockInfoModal(resume)}
                     />
                   )}
 
@@ -395,15 +406,29 @@ function App() {
               <li><strong>Lock HYPR:</strong> Moves the approved HYPR into the staking contract for the duration you choose.</li>
             </ol>
             <p>You only need to approve additional HYPR when your existing allowance is too low.</p>
-            <button
-              className="secondary-button"
-              onClick={async () => {
-                await acknowledgeLockModal();
-                dismissLockInfoModal();
-              }}
-            >
-              Got it
-            </button>
+            <div className="modal-actions">
+              <button
+                className="secondary-button ghost"
+                onClick={() => {
+                  dismissLockInfoModal();
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="secondary-button"
+                onClick={async () => {
+                  await acknowledgeLockModal();
+                  const resume = lockModalResume;
+                  dismissLockInfoModal();
+                  if (resume) {
+                    resume();
+                  }
+                }}
+              >
+                Accept and continue transactions
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -428,7 +453,7 @@ interface LockStepProps {
   walletAddress?: `0x${string}`;
   targetRegistryAddress: `0x${string}`;
   hasSeenLockModal: boolean;
-  onRequireLockInfo: () => void;
+  onRequireLockInfo: (resume: () => void) => void;
 }
 
 const LockStep = ({
@@ -462,6 +487,8 @@ const LockStep = ({
   const manageSuccessRef = useRef<HTMLDivElement | null>(null);
 
   const [pendingLock, setPendingLock] = useState<{ amount: bigint; duration: bigint } | null>(null);
+  const allowanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const manageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nowSecondsRef = useRef(Math.floor(Date.now() / 1000));
   const nowSeconds = nowSecondsRef.current;
 
@@ -519,6 +546,7 @@ const LockStep = ({
     error: allowanceWriteError,
     isPending: isAllowancePending,
     writeContract: writeApproveContract,
+    reset: resetAllowanceWrite,
   } = useWriteContract();
 
   const {
@@ -526,6 +554,7 @@ const LockStep = ({
     error: manageWriteError,
     isPending: isManagePending,
     writeContract: writeManageLock,
+    reset: resetManageWrite,
   } = useWriteContract();
 
   const {
@@ -542,18 +571,26 @@ const LockStep = ({
     hash: manageTxHash,
   });
 
+  const pushManageError = useCallback(
+    (message: string) => {
+      manageErrorIdRef.current += 1;
+      setManageError({ id: manageErrorIdRef.current, text: message });
+    },
+    [setManageError],
+  );
+
   useEffect(() => {
     if (allowanceWriteError) {
       pushManageError(getErrorMessage(allowanceWriteError));
       setPendingLock(null);
     }
-  }, [allowanceWriteError]);
+  }, [allowanceWriteError, pushManageError]);
 
   useEffect(() => {
     if (manageWriteError) {
       pushManageError(getErrorMessage(manageWriteError));
     }
-  }, [manageWriteError]);
+  }, [manageWriteError, pushManageError]);
 
   useEffect(() => {
     if (manageError) {
@@ -610,13 +647,60 @@ const LockStep = ({
     }
   }, [isAllowanceConfirmed, pendingLock, refreshLockStatus]);
 
-  const pushManageError = (message: string) => {
-    manageErrorIdRef.current += 1;
-    setManageError({ id: manageErrorIdRef.current, text: message });
-  };
+  useEffect(() => {
+    if (isAllowancePending) {
+      allowanceTimeoutRef.current = setTimeout(() => {
+        resetAllowanceWrite();
+        allowanceTimeoutRef.current = null;
+        setPendingLock(null);
+        pushManageError('Approval request timed out. Please try again.');
+      }, 30_000);
+      return () => {
+        if (allowanceTimeoutRef.current) {
+          clearTimeout(allowanceTimeoutRef.current);
+          allowanceTimeoutRef.current = null;
+        }
+      };
+    }
+    if (allowanceTimeoutRef.current) {
+      clearTimeout(allowanceTimeoutRef.current);
+      allowanceTimeoutRef.current = null;
+    }
+  }, [isAllowancePending, pushManageError, resetAllowanceWrite]);
+
+  useEffect(() => {
+    if (isManagePending) {
+      manageTimeoutRef.current = setTimeout(() => {
+        resetManageWrite();
+        manageTimeoutRef.current = null;
+        pushManageError('Lock transaction timed out. Please try again.');
+      }, 30_000);
+      return () => {
+        if (manageTimeoutRef.current) {
+          clearTimeout(manageTimeoutRef.current);
+          manageTimeoutRef.current = null;
+        }
+      };
+    }
+    if (manageTimeoutRef.current) {
+      clearTimeout(manageTimeoutRef.current);
+      manageTimeoutRef.current = null;
+    }
+  }, [isManagePending, pushManageError, resetManageWrite]);
 
   const handleLockDurationInputChange = (field: DurationField, value: string) => {
-    setDurationInputs((prev) => ({ ...prev, [field]: value }));
+    setDurationInputs((prev) => {
+      const updated: DurationInputValues = { ...prev, [field]: value };
+      if (
+        BASE_DURATION_FIELDS.includes(field) &&
+        value !== DURATION_INPUT_DEFAULTS[field as DurationField]
+      ) {
+        PRECISION_DURATION_FIELDS.forEach((precisionField) => {
+          updated[precisionField] = '0';
+        });
+      }
+      return updated;
+    });
   };
 
   const handleLockDurationInputBlur = (field: DurationField) => {
@@ -664,14 +748,8 @@ const LockStep = ({
     }
   };
 
-  const handleManageLock = async (event: FormEvent) => {
-    event.preventDefault();
+  const submitLockRequest = async () => {
     setManageError(null);
-
-    if (!hasSeenLockModal) {
-      onRequireLockInfo();
-      return;
-    }
 
     if (!walletConnected || !walletAddress) {
       pushManageError('Connect a wallet to manage locks.');
@@ -702,41 +780,41 @@ const LockStep = ({
       pushManageError(`Duration must be at least ${formatDurationSeconds(MIN_LOCK_DURATION_SECONDS)}.`);
       return;
     }
-  if (selectedLockDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
-    pushManageError(`Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`);
-    return;
-  }
-
-  const amountWei = additionalAmountWei;
-  const allowanceWei = tokeregistryAllowance ? BigInt(tokeregistryAllowance.amount_raw_wei) : 0n;
-  const requiredAllowance = amountWei > allowanceWei ? amountWei - allowanceWei : 0n;
-  let submittedDurationSeconds = selectedLockDurationSeconds;
-  if (hasExistingLock && amountWei > 0n) {
-    const requiredDuration = calculateRequiredAdditionalDuration(
-      existingAmountWei,
-      existingDurationSeconds,
-      amountWei,
-      selectedLockDurationSeconds,
-    );
-    if (!requiredDuration) {
-      pushManageError('Unable to compute required duration. Adjust amount or duration.');
+    if (selectedLockDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
+      pushManageError(`Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`);
       return;
     }
-    if (
-      requiredDuration < BigInt(MIN_LOCK_DURATION_SECONDS) ||
-      requiredDuration > BigInt(MAX_LOCK_DURATION_SECONDS)
-    ) {
-      pushManageError(
-        `Computed duration must be between ${formatDurationSeconds(
-          MIN_LOCK_DURATION_SECONDS,
-        )} and ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`,
+
+    const amountWei = additionalAmountWei;
+    const allowanceWei = tokeregistryAllowance ? BigInt(tokeregistryAllowance.amount_raw_wei) : 0n;
+    const needsAllowanceTopUp = amountWei > allowanceWei;
+    let submittedDurationSeconds = selectedLockDurationSeconds;
+    if (hasExistingLock && amountWei > 0n) {
+      const requiredDuration = calculateRequiredAdditionalDuration(
+        existingAmountWei,
+        existingDurationSeconds,
+        amountWei,
+        selectedLockDurationSeconds,
       );
-      return;
+      if (!requiredDuration) {
+        pushManageError('Unable to compute required duration. Adjust amount or duration.');
+        return;
+      }
+      if (
+        requiredDuration < BigInt(MIN_LOCK_DURATION_SECONDS) ||
+        requiredDuration > BigInt(MAX_LOCK_DURATION_SECONDS)
+      ) {
+        pushManageError(
+          `Computed duration must be between ${formatDurationSeconds(
+            MIN_LOCK_DURATION_SECONDS,
+          )} and ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`,
+        );
+        return;
+      }
+      submittedDurationSeconds = requiredDuration;
     }
-    submittedDurationSeconds = requiredDuration;
-  }
 
-    if (requiredAllowance > 0n) {
+    if (needsAllowanceTopUp) {
       if (!hyprTokenAddress) {
         pushManageError('Unable to resolve HYPR token address.');
         return;
@@ -747,7 +825,7 @@ const LockStep = ({
           address: hyprTokenAddress as `0x${string}`,
           abi: erc20ApproveAbi,
           functionName: 'approve',
-          args: [targetRegistryAddress, requiredAllowance],
+          args: [targetRegistryAddress, amountWei],
         });
       } catch (err) {
         setPendingLock(null);
@@ -757,6 +835,19 @@ const LockStep = ({
     }
 
     await triggerLock({ amount: amountWei, duration: submittedDurationSeconds });
+  };
+
+  const handleManageLock = async (event: FormEvent) => {
+    event.preventDefault();
+
+    if (!hasSeenLockModal) {
+      onRequireLockInfo(() => {
+        void submitLockRequest();
+      });
+      return;
+    }
+
+    await submitLockRequest();
   };
 
   if (!connectComplete) {
@@ -1065,7 +1156,18 @@ const BindStep = ({
   };
 
   const handleTransferDurationInputChange = (field: DurationField, value: string) => {
-    setTransferDurationInputs((prev) => ({ ...prev, [field]: value }));
+    setTransferDurationInputs((prev) => {
+      const updated: DurationInputValues = { ...prev, [field]: value };
+      if (
+        BASE_DURATION_FIELDS.includes(field) &&
+        value !== DURATION_INPUT_DEFAULTS[field as DurationField]
+      ) {
+        PRECISION_DURATION_FIELDS.forEach((precisionField) => {
+          updated[precisionField] = '0';
+        });
+      }
+      return updated;
+    });
   };
 
   const handleTransferDurationInputBlur = (field: DurationField) => {
