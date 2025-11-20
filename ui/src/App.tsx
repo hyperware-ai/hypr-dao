@@ -1385,8 +1385,13 @@ const BindStep = ({
     transferDurationMode === 'duration'
       ? transferDurationSecondsFromInputs
       : transferEndDateDurationSeconds ?? 0n;
-  const hasTransferValidEndDate =
-    transferDurationMode === 'duration' ? true : Boolean(transferEndDateDurationSeconds);
+  const destinationHash = useMemo(() => resolveNamehash(dstNameInput), [dstNameInput]);
+  const destinationIsDefault = destinationHash === ZERO_NAMEHASH;
+  const hasTransferValidEndDate = destinationIsDefault
+    ? true
+    : transferDurationMode === 'duration'
+      ? true
+      : Boolean(transferEndDateDurationSeconds);
   const transferUnlockPreview = useMemo(() => {
     if (selectedTransferDurationSeconds <= 0n) {
       return null;
@@ -1394,7 +1399,6 @@ const BindStep = ({
     return formatTimestamp(transferNowSeconds + Number(selectedTransferDurationSeconds));
   }, [selectedTransferDurationSeconds, transferNowSeconds]);
 
-  const destinationHash = useMemo(() => resolveNamehash(dstNameInput), [dstNameInput]);
   const destinationHasActiveBinding = useMemo(() => {
     if (destinationHash === ZERO_NAMEHASH) {
       return false;
@@ -1505,8 +1509,10 @@ const BindStep = ({
       return;
     }
 
-    if (!dstNameInput.trim()) {
-      pushTransferError('Destination name is required.');
+    const hasSourceName = srcNameInput.trim().length > 0;
+    const hasDestinationName = dstNameInput.trim().length > 0;
+    if (!hasSourceName && !hasDestinationName) {
+      pushTransferError('Enter at least a source or destination name.');
       return;
     }
 
@@ -1525,6 +1531,12 @@ const BindStep = ({
     }
 
     const srcHash = resolveNamehash(srcNameInput);
+    const dstHash = resolveNamehash(dstNameInput);
+    const dstIsDefault = dstHash === ZERO_NAMEHASH;
+    if (srcHash === ZERO_NAMEHASH && dstHash === ZERO_NAMEHASH) {
+      pushTransferError('Select a source or destination binding to transfer.');
+      return;
+    }
     const maxAmountWei = parseEther(transferAmountInput);
     if (srcHash !== ZERO_NAMEHASH) {
       const sourceBinding = bindings.find(
@@ -1544,7 +1556,7 @@ const BindStep = ({
         return;
       }
     }
-    if (availableToBind) {
+    if (availableToBind && srcHash === ZERO_NAMEHASH) {
       const availableWei = BigInt(availableToBind.amount_raw_wei);
       if (maxAmountWei > availableWei) {
         pushTransferError('Amount exceeds HYPR available to bind.');
@@ -1552,57 +1564,58 @@ const BindStep = ({
       }
     }
 
-    if (transferDurationMode === 'end-date') {
-      if (!transferEndDateInput) {
-        pushTransferError('Select an end date.');
-        return;
+    if (!dstIsDefault) {
+      if (transferDurationMode === 'end-date') {
+        if (!transferEndDateInput) {
+          pushTransferError('Select an end date.');
+          return;
+        }
+        if (!transferEndDateDurationSeconds) {
+          pushTransferError('Select an end date within the allowed range.');
+          return;
+        }
       }
-      if (!transferEndDateDurationSeconds) {
-        pushTransferError('Select an end date within the allowed range.');
-        return;
-      }
-    }
 
-    if (selectedTransferDurationSeconds <= 0n) {
-      pushTransferError('Enter a positive duration.');
-      return;
-    }
-    if (selectedTransferDurationSeconds < minDurationSecondsBigInt) {
-      pushTransferError(`Duration must be at least ${formatDurationSeconds(minLockDurationSeconds)}.`);
-      return;
-    }
-    if (selectedTransferDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
-      pushTransferError(`Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`);
-      return;
+      const isZeroDuration = selectedTransferDurationSeconds === 0n;
+      if (isZeroDuration && !dstIsDefault) {
+        pushTransferError('Enter a positive duration.');
+        return;
+      }
+      if (selectedTransferDurationSeconds < minDurationSecondsBigInt) {
+        pushTransferError(`Duration must be at least ${formatDurationSeconds(minLockDurationSeconds)}.`);
+        return;
+      }
+      if (selectedTransferDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
+        pushTransferError(
+          `Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`,
+        );
+        return;
+      }
     }
 
     try {
-      const srcHash = resolveNamehash(srcNameInput);
-      const dstHash = resolveNamehash(dstNameInput);
-      if (dstHash === ZERO_NAMEHASH) {
-        pushTransferError('Destination cannot be the default registration.');
-        return;
-      }
-
-      try {
-        const resolvedDestination = await CallerApp.lookup_name(dstHash);
-        if (!resolvedDestination || resolvedDestination.trim() === '') {
-          pushTransferError('Destination name is unknown. Please choose a registered name.');
+      if (!dstIsDefault) {
+        try {
+          const resolvedDestination = await CallerApp.lookup_name(dstHash);
+          if (!resolvedDestination || resolvedDestination.trim() === '') {
+            pushTransferError('Destination name is unknown. Please choose a registered name.');
+            return;
+          }
+        } catch (lookupError) {
+          pushTransferError('Unable to validate destination name. Please try again.');
           return;
         }
-      } catch (lookupError) {
-        pushTransferError('Unable to validate destination name. Please try again.');
-        return;
       }
 
+      const durationForSubmission = dstIsDefault ? 0n : selectedTransferDurationSeconds;
       await writeTransferContract({
         address: targetRegistryAddress,
         abi: transferRegistrationAbi,
         functionName: 'transferRegistration',
-        args: [srcHash, dstHash, maxAmountWei, selectedTransferDurationSeconds],
+        args: [srcHash, dstHash, maxAmountWei, durationForSubmission],
       });
     } catch (error) {
-        pushTransferError(getErrorMessage(error));
+      pushTransferError(getErrorMessage(error));
     }
   };
 
@@ -1677,7 +1690,6 @@ const BindStep = ({
                 placeholder="example.name.os"
                 value={dstNameInput}
                 onChange={(event) => setDstNameInput(event.target.value)}
-                required
               />
             </label>
             <label className="input-field">
@@ -1708,6 +1720,7 @@ const BindStep = ({
         endDateMin={transferEndDateMin}
         endDateMax={transferEndDateMax}
         timestampLabel="Unbind timestamp"
+        showSummary={!destinationIsDefault}
       />
     )}
         {transferError && (
@@ -1749,6 +1762,7 @@ interface DurationInputsProps {
   endDateMax?: Date;
   showUnlockPreview?: boolean;
   timestampLabel?: string;
+  showSummary?: boolean;
 }
 
 interface BottomTabsProps {
@@ -1807,6 +1821,7 @@ const DurationInputs = ({
   endDateMax,
   showUnlockPreview = true,
   timestampLabel = 'Unlock timestamp',
+  showSummary = true,
 }: DurationInputsProps) => {
   const SecondsTimeInput = ({
     value,
@@ -1890,19 +1905,21 @@ const DurationInputs = ({
           />
         </label>
       )}
-      <div className="duration-summary">
-        {showUnlockPreview && !computedUnlockLabel && (
-          <span>
-            {timestampLabel}: {unlockText}
-          </span>
-        )}
-        {!computedDurationLabel && <span>Duration total: {durationLabel}</span>}
-        {computedUnlockLabel && <span>Requested final unlock: {computedUnlockLabel}</span>}
-        {computedDurationLabel && <span>Requested final duration: {computedDurationLabel}</span>}
-        {resolvedDurationLabel && (
-          <span>(Duration to be supplied to tx): {resolvedDurationLabel}</span>
-        )}
-      </div>
+      {showSummary && (
+        <div className="duration-summary">
+          {showUnlockPreview && !computedUnlockLabel && (
+            <span>
+              {timestampLabel}: {unlockText}
+            </span>
+          )}
+          {!computedDurationLabel && <span>Duration total: {durationLabel}</span>}
+          {computedUnlockLabel && <span>Requested final unlock: {computedUnlockLabel}</span>}
+          {computedDurationLabel && <span>Requested final duration: {computedDurationLabel}</span>}
+          {resolvedDurationLabel && (
+            <span>(Duration to be supplied to tx): {resolvedDurationLabel}</span>
+          )}
+        </div>
+      )}
     </div>
   );
 };
