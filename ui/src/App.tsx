@@ -225,6 +225,10 @@ function App() {
   const [activeStep, setActiveStep] = useState<StepId>('lock');
   const [showLockModal, setShowLockModal] = useState(false);
   const [lockModalResume, setLockModalResume] = useState<(() => void) | null>(null);
+  const [lockUpdateNonce, setLockUpdateNonce] = useState(0);
+  const handleLockUpdated = useCallback(() => {
+    setLockUpdateNonce((prev) => prev + 1);
+  }, []);
   const {
     nodeId,
     isConnected,
@@ -320,7 +324,7 @@ const { address, chain, isConnected: isWalletConnected } = useAccount();
       if (connectComplete && environmentReady) {
         void refreshLockStatus();
       }
-    }, 90_000);
+    }, 20_000);
     return () => clearInterval(id);
   }, [connectComplete, environmentReady, refreshLockStatus]);
 
@@ -422,6 +426,7 @@ const { address, chain, isConnected: isWalletConnected } = useAccount();
                       hasSeenLockModal={lockModalSeen}
                       onRequireLockInfo={(resume) => showLockInfoModal(resume)}
                       minLockDurationSeconds={minLockDurationSeconds}
+                      onLockUpdated={handleLockUpdated}
                     />
                   )}
 
@@ -436,6 +441,7 @@ const { address, chain, isConnected: isWalletConnected } = useAccount();
                       bindings={bindings}
                       refreshLockStatus={refreshLockStatus}
                       minLockDurationSeconds={minLockDurationSeconds}
+                      lockUpdateNonce={lockUpdateNonce}
                     />
                   )}
                 </main>
@@ -517,6 +523,7 @@ interface LockStepProps {
   hasSeenLockModal: boolean;
   onRequireLockInfo: (resume: () => void) => void;
   minLockDurationSeconds: number;
+  onLockUpdated: () => void;
 }
 
 const LockStep = ({
@@ -538,9 +545,11 @@ const LockStep = ({
   hasSeenLockModal,
   onRequireLockInfo,
   minLockDurationSeconds,
+  onLockUpdated,
 }: LockStepProps) => {
   const [amountInput, setAmountInput] = useState('');
   const [durationInputs, setDurationInputs] = useState<DurationInputValues>(createDefaultDurationInputs);
+  const [lockDurationDirty, setLockDurationDirty] = useState(false);
   const [lockDurationMode, setLockDurationMode] = useState<DurationMode>('duration');
   const [lockEndDateInput, setLockEndDateInput] = useState<Date | null>(null);
   const [showLockPrecision, setShowLockPrecision] = useState(false);
@@ -559,21 +568,30 @@ const LockStep = ({
   const durationParts = useMemo(() => inputsToDurationParts(durationInputs), [durationInputs]);
   const lockedAmountWei = lockDetails?.amount_raw_wei ? BigInt(lockDetails.amount_raw_wei) : 0n;
   const hasExistingLock = lockedAmountWei > 0n;
-  const lastDefaultDurationSeconds = useRef<number | null>(null);
+  const lastSyncedDurationSeconds = useRef<number | null>(null);
+  useEffect(() => {
+    if (!hasExistingLock) {
+      setLockDurationDirty(false);
+      lastSyncedDurationSeconds.current = null;
+    }
+  }, [hasExistingLock]);
   useEffect(() => {
     if (!hasExistingLock || !lockDetails) {
-      lastDefaultDurationSeconds.current = null;
+      lastSyncedDurationSeconds.current = null;
       return;
     }
     const remainingSeconds = lockDetails.remaining_seconds ?? 0;
-    if (remainingSeconds === 0 || lastDefaultDurationSeconds.current === remainingSeconds) {
+    if (remainingSeconds === 0 || lastSyncedDurationSeconds.current === remainingSeconds) {
+      return;
+    }
+    if (lockDurationDirty) {
       return;
     }
     const parts = durationInputsFromSeconds(BigInt(remainingSeconds));
     setDurationInputs(parts);
     setLockEndDateInput(new Date(lockDetails.unlock_timestamp * 1000));
-    lastDefaultDurationSeconds.current = remainingSeconds;
-  }, [hasExistingLock, lockDetails]);
+    lastSyncedDurationSeconds.current = remainingSeconds;
+  }, [hasExistingLock, lockDetails, lockDurationDirty]);
   const lockDurationSecondsFromInputs = useMemo(
     () => durationPartsToSeconds(durationParts),
     [durationParts],
@@ -696,10 +714,13 @@ const LockStep = ({
       setDurationInputs(createDefaultDurationInputs());
       setLockDurationMode('duration');
       setLockEndDateInput(null);
+      setLockDurationDirty(false);
+      lastSyncedDurationSeconds.current = null;
       setPendingLock(null);
       void refreshLockStatus();
+      onLockUpdated();
     }
-  }, [isManageConfirmed, refreshLockStatus]);
+  }, [isManageConfirmed, refreshLockStatus, onLockUpdated]);
 
   useEffect(() => {
     if (isManageConfirmed && manageTxHash) {
@@ -785,7 +806,8 @@ const LockStep = ({
     }
   }, [isManagePending, pushManageError, resetManageWrite]);
 
-  const handleLockDurationInputChange = (field: DurationField, value: string) => {
+const handleLockDurationInputChange = (field: DurationField, value: string) => {
+    setLockDurationDirty(true);
     setDurationInputs((prev) => {
       const updated: DurationInputValues = { ...prev, [field]: value };
       if (
@@ -807,6 +829,16 @@ const LockStep = ({
       }
       return prev;
     });
+  };
+
+  const handleLockEndDateChange = (value: Date | null) => {
+    setLockDurationDirty(true);
+    setLockEndDateInput(value);
+  };
+
+  const handleLockDurationModeChange = (mode: DurationMode) => {
+    setLockDurationDirty(true);
+    setLockDurationMode(mode);
   };
 
   const triggerLock = async ({ amount, duration }: { amount: bigint; duration: bigint }) => {
@@ -1129,9 +1161,9 @@ const LockStep = ({
                 : undefined
             }
             mode={lockDurationMode}
-            onModeChange={setLockDurationMode}
+            onModeChange={handleLockDurationModeChange}
             endDateValue={lockEndDateInput}
-            onEndDateChange={setLockEndDateInput}
+            onEndDateChange={handleLockEndDateChange}
             endDateMin={lockEndDateMin}
             endDateMax={lockEndDateMax}
             showUnlockPreview={!hasExistingLock}
@@ -1183,6 +1215,7 @@ interface BindStepProps {
   bindings: BindingView[];
   refreshLockStatus: () => Promise<void>;
   minLockDurationSeconds: number;
+  lockUpdateNonce: number;
 }
 
 const BindStep = ({
@@ -1195,6 +1228,7 @@ const BindStep = ({
   bindings,
   refreshLockStatus,
   minLockDurationSeconds,
+  lockUpdateNonce,
 }: BindStepProps) => {
   const [srcNameInput, setSrcNameInput] = useState('');
   const [dstNameInput, setDstNameInput] = useState('');
@@ -1202,6 +1236,7 @@ const BindStep = ({
   const [transferDurationInputs, setTransferDurationInputs] = useState<DurationInputValues>(
     createDefaultDurationInputs,
   );
+  const [transferDurationDirty, setTransferDurationDirty] = useState(false);
   const [transferDurationMode, setTransferDurationMode] = useState<DurationMode>('duration');
   const [transferEndDateInput, setTransferEndDateInput] = useState<Date | null>(null);
   const [showTransferPrecision, setShowTransferPrecision] = useState(false);
@@ -1210,6 +1245,7 @@ const BindStep = ({
   const transferErrorIdRef = useRef(0);
   const transferErrorRef = useRef<HTMLDivElement | null>(null);
   const transferSuccessRef = useRef<HTMLDivElement | null>(null);
+  const lastTransferSyncedSeconds = useRef<number | null>(null);
 
   const {
     data: transferTxHash,
@@ -1282,6 +1318,36 @@ const BindStep = ({
       setTransferEndDateInput(transferEndDateMin);
     }
   }, [transferDurationMode, transferEndDateInput, transferEndDateMin]);
+
+  useEffect(() => {
+    if (!lockDetails) {
+      lastTransferSyncedSeconds.current = null;
+      if (!transferDurationDirty) {
+        setTransferDurationInputs(createDefaultDurationInputs());
+        setTransferEndDateInput(null);
+      }
+      return;
+    }
+    const remainingSeconds = lockDetails.remaining_seconds ?? 0;
+    if (remainingSeconds === 0 || lastTransferSyncedSeconds.current === remainingSeconds) {
+      return;
+    }
+    if (transferDurationDirty) {
+      return;
+    }
+    const parts = durationInputsFromSeconds(BigInt(remainingSeconds));
+    setTransferDurationInputs(parts);
+    setTransferEndDateInput(new Date(lockDetails.unlock_timestamp * 1000));
+    lastTransferSyncedSeconds.current = remainingSeconds;
+  }, [lockDetails, transferDurationDirty]);
+
+  useEffect(() => {
+    setTransferDurationDirty(false);
+    setTransferDurationInputs(createDefaultDurationInputs());
+    setTransferDurationMode('duration');
+    setTransferEndDateInput(null);
+    lastTransferSyncedSeconds.current = null;
+  }, [lockUpdateNonce]);
   const transferEndDateDurationSeconds = secondsUntilDate(transferEndDateInput, transferNowSeconds);
   const selectedTransferDurationSeconds =
     transferDurationMode === 'duration'
@@ -1327,6 +1393,7 @@ const BindStep = ({
   };
 
   const handleTransferDurationInputChange = (field: DurationField, value: string) => {
+    setTransferDurationDirty(true);
     setTransferDurationInputs((prev) => {
       const updated: DurationInputValues = { ...prev, [field]: value };
       if (
@@ -1350,6 +1417,16 @@ const BindStep = ({
     });
   };
 
+  const handleTransferEndDateChange = (value: Date | null) => {
+    setTransferDurationDirty(true);
+    setTransferEndDateInput(value);
+  };
+
+  const handleTransferDurationModeChange = (mode: DurationMode) => {
+    setTransferDurationDirty(true);
+    setTransferDurationMode(mode);
+  };
+
   useEffect(() => {
     if (isTransferConfirmed) {
       setSrcNameInput('');
@@ -1358,6 +1435,8 @@ const BindStep = ({
       setTransferDurationInputs(createDefaultDurationInputs());
       setTransferDurationMode('duration');
       setTransferEndDateInput(null);
+      setTransferDurationDirty(false);
+      lastTransferSyncedSeconds.current = null;
       void refreshLockStatus();
     }
   }, [isTransferConfirmed, refreshLockStatus]);
@@ -1582,18 +1661,18 @@ const BindStep = ({
         values={transferDurationInputs}
         onChange={handleTransferDurationInputChange}
         onBlurField={handleTransferDurationInputBlur}
-            showPrecision={showTransferPrecision}
-            onTogglePrecision={() => setShowTransferPrecision((prev) => !prev)}
-            durationSeconds={selectedTransferDurationSeconds}
-            unlockPreview={transferUnlockPreview}
-            mode={transferDurationMode}
-            onModeChange={setTransferDurationMode}
-            endDateValue={transferEndDateInput}
-            onEndDateChange={setTransferEndDateInput}
-            endDateMin={transferEndDateMin}
-            endDateMax={transferEndDateMax}
-          />
-        )}
+        showPrecision={showTransferPrecision}
+        onTogglePrecision={() => setShowTransferPrecision((prev) => !prev)}
+        durationSeconds={selectedTransferDurationSeconds}
+        unlockPreview={transferUnlockPreview}
+        mode={transferDurationMode}
+        onModeChange={handleTransferDurationModeChange}
+        endDateValue={transferEndDateInput}
+        onEndDateChange={handleTransferEndDateChange}
+        endDateMin={transferEndDateMin}
+        endDateMax={transferEndDateMax}
+      />
+    )}
         {transferError && (
           <div className="inline-error" ref={transferErrorRef}>
             {transferError.text}

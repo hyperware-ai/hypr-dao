@@ -556,6 +556,14 @@ input.date-picker-input::placeholder {
   border: 1px solid var(--border-color);
   background: var(--surface);
   color: var(--text-primary);
+  font-weight: 600;
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.date-picker-time-input::-webkit-calendar-picker-indicator {
+  filter: invert(0.85);
+  opacity: 0.9;
+  cursor: pointer;
 }
 
 .react-datepicker {
