@@ -203,6 +203,24 @@ const durationInputsFromSeconds = (seconds: bigint): DurationInputValues => {
   return result;
 };
 
+const DEFAULT_DURATION_SECONDS = durationPartsToSeconds(
+  inputsToDurationParts(createDefaultDurationInputs()),
+);
+
+const clampDurationSeconds = (value: bigint, minSeconds: number) => {
+  const minBigInt = BigInt(minSeconds);
+  if (minBigInt <= 0) {
+    return value;
+  }
+  return value < minBigInt ? minBigInt : value;
+};
+
+const createDurationInputsAtLeastMin = (seconds: bigint, minSeconds: number) =>
+  durationInputsFromSeconds(clampDurationSeconds(seconds, minSeconds));
+
+const createDefaultDurationInputsAtLeastMin = (minSeconds: number) =>
+  createDurationInputsAtLeastMin(DEFAULT_DURATION_SECONDS, minSeconds);
+
 const calculateRequiredAdditionalDuration = (
   existingAmount: bigint,
   existingDuration: bigint,
@@ -548,7 +566,9 @@ const LockStep = ({
   onLockUpdated,
 }: LockStepProps) => {
   const [amountInput, setAmountInput] = useState('');
-  const [durationInputs, setDurationInputs] = useState<DurationInputValues>(createDefaultDurationInputs);
+  const [durationInputs, setDurationInputs] = useState<DurationInputValues>(() =>
+    createDefaultDurationInputsAtLeastMin(minLockDurationSeconds),
+  );
   const [lockDurationDirty, setLockDurationDirty] = useState(false);
   const [lockDurationMode, setLockDurationMode] = useState<DurationMode>('duration');
   const [lockEndDateInput, setLockEndDateInput] = useState<Date | null>(null);
@@ -587,11 +607,17 @@ const LockStep = ({
     if (lockDurationDirty) {
       return;
     }
-    const parts = durationInputsFromSeconds(BigInt(remainingSeconds));
-    setDurationInputs(parts);
-    setLockEndDateInput(new Date(lockDetails.unlock_timestamp * 1000));
+    const nextDurationInputs = createDurationInputsAtLeastMin(
+      BigInt(remainingSeconds),
+      minLockDurationSeconds,
+    );
+    setDurationInputs(nextDurationInputs);
+    const nowSecondsLatest = Math.floor(Date.now() / 1000);
+    const minimumUnlockSeconds = nowSecondsLatest + minLockDurationSeconds;
+    const effectiveUnlockSeconds = Math.max(lockDetails.unlock_timestamp, minimumUnlockSeconds);
+    setLockEndDateInput(new Date(effectiveUnlockSeconds * 1000));
     lastSyncedDurationSeconds.current = remainingSeconds;
-  }, [hasExistingLock, lockDetails, lockDurationDirty]);
+  }, [hasExistingLock, lockDetails, lockDurationDirty, minLockDurationSeconds]);
   const lockDurationSecondsFromInputs = useMemo(
     () => durationPartsToSeconds(durationParts),
     [durationParts],
@@ -711,7 +737,7 @@ const LockStep = ({
   useEffect(() => {
     if (isManageConfirmed) {
       setAmountInput('');
-      setDurationInputs(createDefaultDurationInputs());
+      setDurationInputs(createDefaultDurationInputsAtLeastMin(minLockDurationSeconds));
       setLockDurationMode('duration');
       setLockEndDateInput(null);
       setLockDurationDirty(false);
@@ -720,7 +746,7 @@ const LockStep = ({
       void refreshLockStatus();
       onLockUpdated();
     }
-  }, [isManageConfirmed, refreshLockStatus, onLockUpdated]);
+  }, [isManageConfirmed, refreshLockStatus, onLockUpdated, minLockDurationSeconds]);
 
   useEffect(() => {
     if (isManageConfirmed && manageTxHash) {
@@ -1098,7 +1124,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                 {lockDetails.remaining_seconds === Number.MAX_SAFE_INTEGER
                   ? 'Unknown remaining time'
                   : lockDetails.remaining_seconds === 0
-                    ? 'Expired'
+                    ? 'Unlocked'
                     : `${formatSeconds(lockDetails.remaining_seconds)} remaining`}
               </span>
               {lockDetails.remaining_seconds === 0 && (
@@ -1233,8 +1259,8 @@ const BindStep = ({
   const [srcNameInput, setSrcNameInput] = useState('');
   const [dstNameInput, setDstNameInput] = useState('');
   const [transferAmountInput, setTransferAmountInput] = useState('');
-  const [transferDurationInputs, setTransferDurationInputs] = useState<DurationInputValues>(
-    createDefaultDurationInputs,
+  const [transferDurationInputs, setTransferDurationInputs] = useState<DurationInputValues>(() =>
+    createDefaultDurationInputsAtLeastMin(minLockDurationSeconds),
   );
   const [transferDurationDirty, setTransferDurationDirty] = useState(false);
   const [transferDurationMode, setTransferDurationMode] = useState<DurationMode>('duration');
@@ -1323,7 +1349,7 @@ const BindStep = ({
     if (!lockDetails) {
       lastTransferSyncedSeconds.current = null;
       if (!transferDurationDirty) {
-        setTransferDurationInputs(createDefaultDurationInputs());
+        setTransferDurationInputs(createDefaultDurationInputsAtLeastMin(minLockDurationSeconds));
         setTransferEndDateInput(null);
       }
       return;
@@ -1335,19 +1361,25 @@ const BindStep = ({
     if (transferDurationDirty) {
       return;
     }
-    const parts = durationInputsFromSeconds(BigInt(remainingSeconds));
-    setTransferDurationInputs(parts);
-    setTransferEndDateInput(new Date(lockDetails.unlock_timestamp * 1000));
+    const nextDurationInputs = createDurationInputsAtLeastMin(
+      BigInt(remainingSeconds),
+      minLockDurationSeconds,
+    );
+    setTransferDurationInputs(nextDurationInputs);
+    const nowSecondsLatest = Math.floor(Date.now() / 1000);
+    const minUnbindSeconds = nowSecondsLatest + minLockDurationSeconds;
+    const effectiveUnbindSeconds = Math.max(lockDetails.unlock_timestamp, minUnbindSeconds);
+    setTransferEndDateInput(new Date(effectiveUnbindSeconds * 1000));
     lastTransferSyncedSeconds.current = remainingSeconds;
-  }, [lockDetails, transferDurationDirty]);
+  }, [lockDetails, transferDurationDirty, minLockDurationSeconds]);
 
   useEffect(() => {
     setTransferDurationDirty(false);
-    setTransferDurationInputs(createDefaultDurationInputs());
+    setTransferDurationInputs(createDefaultDurationInputsAtLeastMin(minLockDurationSeconds));
     setTransferDurationMode('duration');
     setTransferEndDateInput(null);
     lastTransferSyncedSeconds.current = null;
-  }, [lockUpdateNonce]);
+  }, [lockUpdateNonce, minLockDurationSeconds]);
   const transferEndDateDurationSeconds = secondsUntilDate(transferEndDateInput, transferNowSeconds);
   const selectedTransferDurationSeconds =
     transferDurationMode === 'duration'
@@ -1432,14 +1464,14 @@ const BindStep = ({
       setSrcNameInput('');
       setDstNameInput('');
       setTransferAmountInput('');
-      setTransferDurationInputs(createDefaultDurationInputs());
+      setTransferDurationInputs(createDefaultDurationInputsAtLeastMin(minLockDurationSeconds));
       setTransferDurationMode('duration');
       setTransferEndDateInput(null);
       setTransferDurationDirty(false);
       lastTransferSyncedSeconds.current = null;
       void refreshLockStatus();
     }
-  }, [isTransferConfirmed, refreshLockStatus]);
+  }, [isTransferConfirmed, refreshLockStatus, minLockDurationSeconds]);
 
   useEffect(() => {
     if (isTransferConfirmed && transferTxHash) {
@@ -1580,7 +1612,9 @@ const BindStep = ({
   const maxBindingSub = lockDetails
     ? lockDetails.remaining_seconds === Number.MAX_SAFE_INTEGER
       ? 'Unknown remaining time'
-      : `${formatSeconds(lockDetails.remaining_seconds)} remaining`
+      : lockDetails.remaining_seconds === 0
+        ? 'Expired lock must be withdrawn and a new lock created to support new bindings.'
+        : `${formatSeconds(lockDetails.remaining_seconds)} remaining`
     : 'Lock HYPR to enable max expiry';
 
   return (
@@ -1607,7 +1641,9 @@ const BindStep = ({
                     <div className="binding-name">{binding.name ?? 'Unknown name'}</div>
                     <div className="binding-amount">{binding.amount_formatted_hypr}</div>
                     <div className="binding-sub">
-                      {expired ? 'Expired' : `Unlocks ${formatTimestamp(binding.unlock_timestamp)}`}
+                      {expired
+                        ? `Unbound ${formatTimestamp(binding.unlock_timestamp)}`
+                        : `Unbinds ${formatTimestamp(binding.unlock_timestamp)}`}
                     </div>
                   </div>
                 );
@@ -1671,6 +1707,7 @@ const BindStep = ({
         onEndDateChange={handleTransferEndDateChange}
         endDateMin={transferEndDateMin}
         endDateMax={transferEndDateMax}
+        timestampLabel="Unbind timestamp"
       />
     )}
         {transferError && (
@@ -1711,6 +1748,7 @@ interface DurationInputsProps {
   endDateMin?: Date;
   endDateMax?: Date;
   showUnlockPreview?: boolean;
+  timestampLabel?: string;
 }
 
 interface BottomTabsProps {
@@ -1768,6 +1806,7 @@ const DurationInputs = ({
   endDateMin,
   endDateMax,
   showUnlockPreview = true,
+  timestampLabel = 'Unlock timestamp',
 }: DurationInputsProps) => {
   const SecondsTimeInput = ({
     value,
@@ -1852,7 +1891,11 @@ const DurationInputs = ({
         </label>
       )}
       <div className="duration-summary">
-        {showUnlockPreview && !computedUnlockLabel && <span>Unlock timestamp: {unlockText}</span>}
+        {showUnlockPreview && !computedUnlockLabel && (
+          <span>
+            {timestampLabel}: {unlockText}
+          </span>
+        )}
         {!computedDurationLabel && <span>Duration total: {durationLabel}</span>}
         {computedUnlockLabel && <span>Requested final unlock: {computedUnlockLabel}</span>}
         {computedDurationLabel && <span>Requested final duration: {computedDurationLabel}</span>}
@@ -1877,6 +1920,7 @@ const formatTimestamp = (seconds: number) => {
   if (seconds === Number.MAX_SAFE_INTEGER) return 'Unknown';
   return new Date(seconds * 1000).toLocaleString();
 };
+
 
 const formatSeconds = (value: number) => {
   if (value <= 0) return '0s';
