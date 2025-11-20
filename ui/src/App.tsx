@@ -1221,6 +1221,8 @@ const BindStep = ({
   const {
     isLoading: isTransferConfirming,
     isSuccess: isTransferConfirmed,
+    data: transferReceipt,
+    error: transferReceiptError,
   } = useWaitForTransactionReceipt({
     hash: transferTxHash,
   });
@@ -1230,6 +1232,18 @@ const BindStep = ({
       pushTransferError(getErrorMessage(transferWriteError));
     }
   }, [transferWriteError]);
+
+  useEffect(() => {
+    if (transferReceiptError) {
+      pushTransferError(getErrorMessage(transferReceiptError));
+    }
+  }, [transferReceiptError]);
+
+  useEffect(() => {
+    if (transferReceipt && transferReceipt.status === 'reverted') {
+      pushTransferError('Transaction reverted. Check lock and binding states and try again.');
+    }
+  }, [transferReceipt]);
 
   useEffect(() => {
     if (transferError) {
