@@ -1774,7 +1774,7 @@ dependencies = [
 [[package]]
 name = "hyperware_process_lib"
 version = "2.2.0"
-source = "git+https://github.com/hyperware-ai/process_lib.git?rev=48b6715e6c663b74b58e56815fc74139e9c8c202#48b6715e6c663b74b58e56815fc74139e9c8c202"
+source = "git+https://github.com/hyperware-ai/process_lib.git?rev=26565b9c7c53fd6b66845c15ca14caa9d801d821#26565b9c7c53fd6b66845c15ca14caa9d801d821"
 dependencies = [
  "alloy",
  "alloy-primitives",
@@ -2103,7 +2103,7 @@ dependencies = [
  "alloy-primitives",
  "anyhow",
  "hyperprocess_macro",
- "hyperware_process_lib 2.2.0 (git+https://github.com/hyperware-ai/process_lib.git?rev=48b6715e6c663b74b58e56815fc74139e9c8c202)",
+ "hyperware_process_lib 2.2.0 (git+https://github.com/hyperware-ai/process_lib.git?rev=26565b9c7c53fd6b66845c15ca14caa9d801d821)",
  "lock_and_bind_caller_utils",
  "process_macros",
  "serde",
@@ -2118,7 +2118,7 @@ dependencies = [
  "anyhow",
  "futures",
  "futures-util",
- "hyperware_process_lib 2.2.0 (git+https://github.com/hyperware-ai/process_lib.git?rev=48b6715e6c663b74b58e56815fc74139e9c8c202)",
+ "hyperware_process_lib 2.2.0 (git+https://github.com/hyperware-ai/process_lib.git?rev=26565b9c7c53fd6b66845c15ca14caa9d801d821)",
  "once_cell",
  "process_macros",
  "serde",

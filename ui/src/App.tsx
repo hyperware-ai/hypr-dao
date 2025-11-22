@@ -1272,6 +1272,7 @@ const BindStep = ({
   const transferErrorRef = useRef<HTMLDivElement | null>(null);
   const transferSuccessRef = useRef<HTMLDivElement | null>(null);
   const lastTransferSyncedSeconds = useRef<number | null>(null);
+  const [reclaimingNamehash, setReclaimingNamehash] = useState<string | null>(null);
 
   const {
     data: transferTxHash,
@@ -1288,6 +1289,11 @@ const BindStep = ({
   } = useWaitForTransactionReceipt({
     hash: transferTxHash,
   });
+  useEffect(() => {
+    if (!isTransferPending && !isTransferConfirming) {
+      setReclaimingNamehash(null);
+    }
+  }, [isTransferPending, isTransferConfirming]);
 
   useEffect(() => {
     if (transferWriteError) {
@@ -1426,6 +1432,35 @@ const BindStep = ({
   const pushTransferError = (message: string) => {
     transferErrorIdRef.current += 1;
     setTransferError({ id: transferErrorIdRef.current, text: message });
+  };
+
+  const handleReclaimBinding = async (binding: BindingView) => {
+    if (!walletConnected || !walletAddress) {
+      pushTransferError('Connect a wallet to reclaim HYPR.');
+      return;
+    }
+    if ((binding.remaining_seconds ?? 0) > 0) {
+      pushTransferError('Binding has not expired yet.');
+      return;
+    }
+    const amountWei = BigInt(binding.amount_raw_wei);
+    if (amountWei === 0n) {
+      pushTransferError('No HYPR available to reclaim from this binding.');
+      return;
+    }
+    setTransferError(null);
+    setReclaimingNamehash(binding.namehash);
+    try {
+      await writeTransferContract({
+        address: targetRegistryAddress,
+        abi: transferRegistrationAbi,
+        functionName: 'transferRegistration',
+        args: [binding.namehash as `0x${string}`, ZERO_NAMEHASH, amountWei, 0n],
+      });
+    } catch (error) {
+      pushTransferError(getErrorMessage(error));
+      setReclaimingNamehash(null);
+    }
   };
 
   const handleTransferDurationInputChange = (field: DurationField, value: string) => {
@@ -1649,6 +1684,10 @@ const BindStep = ({
             <div className="bindings-list">
               {bindings.map((binding) => {
                 const expired = (binding.remaining_seconds ?? 0) === 0;
+                const reclaimingThis =
+                  expired &&
+                  reclaimingNamehash === binding.namehash &&
+                  (isTransferPending || isTransferConfirming);
                 return (
                   <div className={`binding-row${expired ? ' expired-card' : ''}`} key={binding.namehash}>
                     <div className="binding-name">{binding.name ?? 'Unknown name'}</div>
@@ -1658,6 +1697,16 @@ const BindStep = ({
                         ? `Unbound ${formatTimestamp(binding.unlock_timestamp)}`
                         : `Unbinds ${formatTimestamp(binding.unlock_timestamp)}`}
                     </div>
+                    {expired && (
+                      <button
+                        type="button"
+                        className="secondary-button ghost reclaim-button"
+                        disabled={isTransferPending || isTransferConfirming}
+                        onClick={() => handleReclaimBinding(binding)}
+                      >
+                        {reclaimingThis ? <span className="spinner" /> : 'Reclaim'}
+                      </button>
+                    )}
                   </div>
                 );
               })}
