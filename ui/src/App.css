@@ -285,6 +285,7 @@
   border: 1px solid var(--error-color);
   border-radius: 8px;
   background: rgba(255, 107, 107, 0.15);
+  margin-top: 0.5rem;
 }
 
 .inline-success {
@@ -293,6 +294,14 @@
   border: 1px solid var(--success-color);
   border-radius: 8px;
   background: rgba(81, 207, 102, 0.15);
+  margin-top: 0.5rem;
+}
+
+.input-subtext {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
 }
 
 .modal-actions .secondary-button.ghost.centered {

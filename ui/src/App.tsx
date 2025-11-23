@@ -579,9 +579,14 @@ const LockStep = ({
   const [lockEndDateInput, setLockEndDateInput] = useState<Date | null>(null);
   const [showLockPrecision, setShowLockPrecision] = useState(false);
   const [manageError, setManageError] = useState<BannerMessage | null>(null);
+  const [txNotice, setTxNotice] = useState<BannerMessage & { kind: 'success' | 'error' } | null>(
+    null,
+  );
   const [manageSuccessHash, setManageSuccessHash] = useState<`0x${string}` | null>(null);
   const manageErrorIdRef = useRef(0);
+  const txNoticeIdRef = useRef(0);
   const manageErrorRef = useRef<HTMLDivElement | null>(null);
+  const txNoticeRef = useRef<HTMLDivElement | null>(null);
   const manageSuccessRef = useRef<HTMLDivElement | null>(null);
 
   const [pendingLock, setPendingLock] = useState<{ amount: bigint; duration: bigint } | null>(null);
@@ -589,18 +594,24 @@ const LockStep = ({
   const manageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nowSecondsRef = useRef(Math.floor(Date.now() / 1000));
   const nowSeconds = nowSecondsRef.current;
+  const [userSetLockView, setUserSetLockView] = useState(false);
 
   const durationParts = useMemo(() => inputsToDurationParts(durationInputs), [durationInputs]);
   const lockedAmountWei = lockDetails?.amount_raw_wei ? BigInt(lockDetails.amount_raw_wei) : 0n;
   const hasExistingLock = lockedAmountWei > 0n;
   const hyprOwnedWei = hyprOwned?.amount_raw_wei ? BigInt(hyprOwned.amount_raw_wei) : 0n;
   useEffect(() => {
-    if (!hasExistingLock && lockView !== 'manage') {
-      setLockView('manage');
-    } else if (hasExistingLock && lockView === 'manage') {
+    // when lock existence changes (e.g., after refresh), allow default routing again
+    setUserSetLockView(false);
+  }, [hasExistingLock]);
+  useEffect(() => {
+    if (userSetLockView) return;
+    if (hasExistingLock && lockView !== 'details') {
       setLockView('details');
+    } else if (!hasExistingLock && lockView !== 'manage') {
+      setLockView('manage');
     }
-  }, [hasExistingLock, lockView]);
+  }, [hasExistingLock, lockView, userSetLockView]);
   const lastSyncedDurationSeconds = useRef<number | null>(null);
   useEffect(() => {
     if (!hasExistingLock) {
@@ -625,10 +636,6 @@ const LockStep = ({
       minLockDurationSeconds,
     );
     setDurationInputs(nextDurationInputs);
-    const nowSecondsLatest = Math.floor(Date.now() / 1000);
-    const minimumUnlockSeconds = nowSecondsLatest + minLockDurationSeconds;
-    const effectiveUnlockSeconds = Math.max(lockDetails.unlock_timestamp, minimumUnlockSeconds);
-    setLockEndDateInput(new Date(effectiveUnlockSeconds * 1000));
     lastSyncedDurationSeconds.current = remainingSeconds;
   }, [hasExistingLock, lockDetails, lockDurationDirty, minLockDurationSeconds]);
   const lockDurationSecondsFromInputs = useMemo(
@@ -649,30 +656,7 @@ const LockStep = ({
     const unlockMs = lockDetails?.unlock_timestamp ? lockDetails.unlock_timestamp * 1000 : 0;
     return Math.max(lockEndDateMin.getTime(), unlockMs);
   }, [lockDetails, lockEndDateMin]);
-  useEffect(() => {
-    if (lockDurationMode === 'end-date' && !lockEndDateInput) {
-      const defaultEndDate = new Date(
-        (nowSeconds + Number(DEFAULT_DURATION_SECONDS)) * 1000,
-      );
-      const minMsForMode =
-        lockView === 'extend' ? extendMinMillis : lockEndDateMin.getTime();
-      const clamped = new Date(
-        Math.min(
-          lockEndDateMax.getTime(),
-          Math.max(minMsForMode, defaultEndDate.getTime()),
-        ),
-      );
-      setLockEndDateInput(clamped);
-    }
-  }, [
-    lockDurationMode,
-    lockEndDateInput,
-    lockEndDateMin,
-    lockEndDateMax,
-    nowSeconds,
-    lockView,
-    extendMinMillis,
-  ]);
+  // Removed: legacy default end-date based on DEFAULT_DURATION_SECONDS (1 month)
   const lockEndDateDisplayMin = useMemo(
     () => roundUpToNextDay(lockEndDateMin.getTime()),
     [lockEndDateMin],
@@ -686,13 +670,33 @@ const LockStep = ({
     () => roundUpToNextDay(extendMinMillis),
     [extendMinMillis],
   );
+  const actualMinMsForView = useMemo(
+    () =>
+      lockView === 'extend' || (lockView === 'manage' && hasExistingLock)
+        ? extendMinMillis
+        : lockEndDateMin.getTime(),
+    [extendMinMillis, lockEndDateMin, lockView, hasExistingLock],
+  );
+  const pickerMinDateForView = useMemo(() => {
+    const d = new Date(actualMinMsForView);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, [actualMinMsForView]);
+  const displayMinDateForHint = useMemo(
+    () => roundUpToNextDay(actualMinMsForView),
+    [actualMinMsForView],
+  );
+  const defaultEndMsForView = useMemo(() => {
+    if (lockView === 'manage' && hasExistingLock && lockDetails?.unlock_timestamp) {
+      return lockDetails.unlock_timestamp * 1000;
+    }
+    return displayMinDateForHint.getTime();
+  }, [displayMinDateForHint, hasExistingLock, lockDetails?.unlock_timestamp, lockView]);
   const lockEndDateDurationSeconds = secondsUntilDate(lockEndDateInput, Math.floor(Date.now() / 1000));
   const effectiveMode: DurationMode =
     lockView === 'extend' || lockView === 'manage' ? 'end-date' : lockDurationMode;
   const [lockEndTimeInput, setLockEndTimeInput] = useState('00:00:00');
-  useEffect(() => {
-    setLockEndTimeInput('00:00:00');
-  }, []);
+  const [lockEndTimeDirty, setLockEndTimeDirty] = useState(false);
   useEffect(() => {
     if (!lockEndDateInput || !lockEndTimeInput) return;
     const [h, m, s] = lockEndTimeInput.split(':').map((v) => parseInt(v, 10));
@@ -702,35 +706,32 @@ const LockStep = ({
     setLockEndDateInput(next);
   }, [lockEndTimeInput]);
   useEffect(() => {
-    if (lockEndDateInput && !lockEndTimeInput) {
+    if (lockEndDateInput && (!lockEndTimeInput || !lockEndTimeDirty)) {
       const h = String(lockEndDateInput.getHours()).padStart(2, '0');
       const m = String(lockEndDateInput.getMinutes()).padStart(2, '0');
       const s = String(lockEndDateInput.getSeconds()).padStart(2, '0');
       setLockEndTimeInput(`${h}:${m}:${s}`);
     }
-  }, [lockEndDateInput, lockEndTimeInput]);
+  }, [lockEndDateInput, lockEndTimeDirty, lockEndTimeInput]);
   const selectedLockDurationSeconds =
     effectiveMode === 'duration'
       ? lockDurationSecondsFromInputs
       : lockEndDateDurationSeconds ?? 0n;
   useEffect(() => {
-    if (effectiveMode !== 'end-date' || lockEndDateInput) {
+    if (lockDurationDirty) {
       return;
     }
-    const displayMinDate =
-      lockView === 'extend'
-        ? extendEndDateDisplayMin
-        : lockEndDateDisplayMin;
-    setLockEndDateInput(new Date(displayMinDate));
-    setLockEndTimeInput('00:00:00');
-  }, [
-    effectiveMode,
-    lockEndDateInput,
-    lockView,
-    extendEndDateDisplayMin,
-    lockEndDateDisplayMin,
-    setLockEndTimeInput,
-  ]);
+    if (!lockEndDateInput) {
+      const next = new Date(defaultEndMsForView);
+      setLockEndDateInput(next);
+      if (!lockEndTimeDirty) {
+        const h = String(next.getHours()).padStart(2, '0');
+        const m = String(next.getMinutes()).padStart(2, '0');
+        const s = String(next.getSeconds()).padStart(2, '0');
+        setLockEndTimeInput(`${h}:${m}:${s}`);
+      }
+    }
+  }, [defaultEndMsForView, lockDurationDirty, lockEndDateInput, lockEndTimeDirty]);
   const lockUnlockPreview = useMemo(() => {
     if (selectedLockDurationSeconds <= 0n) {
       return null;
@@ -772,6 +773,8 @@ const LockStep = ({
   const {
     isLoading: isManageConfirming,
     isSuccess: isManageConfirmed,
+    isError: isManageReceiptError,
+    error: manageReceiptError,
   } = useWaitForTransactionReceipt({
     hash: manageTxHash,
   });
@@ -790,6 +793,13 @@ const LockStep = ({
     },
     [setManageError],
   );
+  const pushTxNotice = useCallback(
+    (message: string, kind: 'success' | 'error') => {
+      txNoticeIdRef.current += 1;
+      setTxNotice({ id: txNoticeIdRef.current, text: message, kind });
+    },
+    [],
+  );
 
   useEffect(() => {
     if (allowanceWriteError) {
@@ -800,9 +810,12 @@ const LockStep = ({
 
   useEffect(() => {
     if (manageWriteError) {
-      pushManageError(getErrorMessage(manageWriteError));
+      const msg = getErrorMessage(manageWriteError);
+      pushManageError(msg);
+      pushTxNotice(msg, 'error');
+      setLockView('details');
     }
-  }, [manageWriteError, pushManageError]);
+  }, [manageWriteError, pushManageError, pushTxNotice]);
 
   useEffect(() => {
     if (withdrawError) {
@@ -811,11 +824,27 @@ const LockStep = ({
   }, [withdrawError, pushManageError]);
 
   useEffect(() => {
+    if (isManageReceiptError && manageReceiptError) {
+      const msg = getErrorMessage(manageReceiptError);
+      pushManageError(msg);
+      pushTxNotice(msg, 'error');
+      setLockView('details');
+    }
+  }, [isManageReceiptError, manageReceiptError, pushManageError, pushTxNotice]);
+
+  useEffect(() => {
     if (manageError) {
       const timeout = setTimeout(() => setManageError(null), 10_000);
       return () => clearTimeout(timeout);
     }
   }, [manageError]);
+
+  useEffect(() => {
+    if (txNotice) {
+      const timeout = setTimeout(() => setTxNotice(null), 10_000);
+      return () => clearTimeout(timeout);
+    }
+  }, [txNotice]);
 
   useEffect(() => {
     if (manageError) {
@@ -841,6 +870,8 @@ const LockStep = ({
   useEffect(() => {
     if (isManageConfirmed && manageTxHash) {
       setManageSuccessHash(manageTxHash);
+      txNoticeIdRef.current += 1;
+      setTxNotice({ id: txNoticeIdRef.current, text: `Lock updated! Tx ${shortHash(manageTxHash)}`, kind: 'success' });
     }
   }, [isManageConfirmed, manageTxHash]);
 
@@ -994,6 +1025,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
   };
 
   const submitLockRequest = async () => {
+    setTxNotice(null);
     setManageError(null);
 
     if (!walletConnected || !walletAddress) {
@@ -1114,7 +1146,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
   }
 
   const lockHeaderSubtitle = 'Lock an amount of HYPR for a specified duration to use in bindings.';
-  const allowZeroAmount = hasExistingLock;
+  const allowZeroAmount = lockView === 'extend';
   const amountProvided = amountInput !== '';
   const amountValue = amountProvided ? Number(amountInput) : 0;
   const additionalAmountWei = useMemo(() => {
@@ -1156,7 +1188,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     isAllowanceConfirming ||
     !amountProvided ||
     (!allowZeroAmount && amountValue <= 0) ||
-    (!hasExistingLock && additionalAmountWei > maxAmountWei) ||
+    ((hasExistingLock ? additionalAmountWei > maxAmountWei : additionalAmountWei > maxAmountWei)) ||
     !hasValidEndDate ||
     durationLessThanExisting;
   const showLockFormContent =
@@ -1181,27 +1213,39 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     selectedLockDurationSeconds,
   ]);
 
+  const resetLockEndDefaults = useCallback(() => {
+    setLockDurationDirty(false);
+    setLockEndDateInput(null);
+    setLockEndTimeInput('00:00:00');
+    setLockEndTimeDirty(false);
+  }, []);
+
   const handleShowManagePanel = useCallback(() => {
+    setUserSetLockView(true);
     setLockView('manage');
     setAmountInput('');
-  }, []);
+    resetLockEndDefaults();
+  }, [resetLockEndDefaults]);
 
   const handleShowExtendPanel = useCallback(() => {
     if (hasExistingLock) {
       setAmountInput('0');
+      setUserSetLockView(true);
       setLockView('extend');
+      resetLockEndDefaults();
     }
-  }, [hasExistingLock]);
+  }, [hasExistingLock, resetLockEndDefaults]);
 
   const handleShowDetailsPanel = useCallback(() => {
     if (hasExistingLock) {
+      setUserSetLockView(true);
       setLockView('details');
     }
   }, [hasExistingLock]);
 
   return (
     <section className="step-card lock-step">
-      {hasAllowance && tokeregistryAllowance && (
+      {lockView === 'details' && hasAllowance && tokeregistryAllowance && (
         <div className="lock-grid">
           <div className="warning-card">
             <LockMetric
@@ -1258,6 +1302,14 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                   Add HYPR to lock
                 </button>
               )}
+              {txNotice && (
+                <div
+                  className={txNotice.kind === 'success' ? 'inline-success' : 'inline-error'}
+                  ref={txNoticeRef}
+                >
+                  {txNotice.text}
+                </div>
+              )}
             </div>
           </div>
         ) : (
@@ -1284,22 +1336,27 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
             </div>
           </div>
           {lockView !== 'extend' && (
-            <div className="input-grid">
-              <label className="input-field">
-                <span>
-                  {hasExistingLock
-                    ? `New Total (from ${lockDetails?.amount_formatted_hypr ?? '0 HYPR'} to ${hyprOwned ? `${formatHyprTotal(lockDetails?.amount_raw_wei, hyprOwned.amount_raw_wei)}` : 'Loading…'} HYPR)`
-                    : `Amount (up to ${maxAmountLabel})`}
+          <div className="input-grid">
+            <label className="input-field">
+              <span>
+                {hasExistingLock
+                  ? `Amount to add (up to ${maxAmountLabel})`
+                  : `Amount (up to ${maxAmountLabel})`}
+              </span>
+              <input
+                type="number"
+                min="0"
+                step="0.000000000000000001"
+                value={amountInput}
+                onChange={(event) => setAmountInput(event.target.value)}
+              />
+              {hasExistingLock && lockView === 'manage' && additionalAmountWei > 0n && (
+                <span className="input-subtext">
+                  New total locked amount: {formatHyprWei(existingAmountWei + additionalAmountWei)}
                 </span>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.000000000000000001"
-                  value={amountInput}
-                  onChange={(event) => setAmountInput(event.target.value)}
-                />
-              </label>
-            </div>
+              )}
+            </label>
+          </div>
           )}
           {showLockFormContent || lockView === 'extend' ? (
             <DurationInputs
@@ -1337,8 +1394,12 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
               onModeChange={lockView === 'extend' || lockView === 'manage' ? () => {} : handleLockDurationModeChange}
               endDateValue={lockEndDateInput}
               onEndDateChange={handleLockEndDateChange}
-              onEndTimeChange={(value) => setLockEndTimeInput(value)}
+              onEndTimeChange={(value) => {
+                setLockEndTimeInput(value);
+                setLockEndTimeDirty(true);
+              }}
               endTimeValue={lockEndTimeInput}
+              endDateMin={pickerMinDateForView}
               endDateMax={lockEndDateMax}
               showUnlockPreview={!hasExistingLock && lockView !== 'extend'}
               durationRangeLabel={
@@ -1351,6 +1412,8 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                   ? `From ${formatDateIso(extendEndDateDisplayMin)} to ${formatDateIso(lockEndDateDisplayMax)}`
                   : lockView === 'manage' && !hasExistingLock
                     ? `From ${formatDateIso(lockEndDateDisplayMin)} to ${formatDateIso(lockEndDateDisplayMax)}`
+                  : lockView === 'manage' && hasExistingLock
+                    ? `From ${formatDateIso(extendEndDateDisplayMin)} to ${formatDateIso(lockEndDateDisplayMax)}`
                     : undefined
               }
               showSummary={false}
@@ -1362,9 +1425,9 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
               {isManagePending || isManageConfirming || isAllowancePending || isAllowanceConfirming ? (
                 <span className="spinner" />
               ) : lockView === 'extend'
-                ? 'Extend Lock'
-                : hasExistingLock
-                  ? 'Add HYPR to Lock'
+                ? 'Update Lock'
+                : hasExistingLock && lockView === 'manage'
+                  ? 'Update Lock'
                   : 'Create Lock'}
             </button>
             {hasExistingLock && (
@@ -2030,14 +2093,6 @@ const iconGlyph: Record<StepIcon, string> = {
   chain: '⛓',
 };
 
-const formatHyprAmountUi = (wei: bigint) => {
-  if (wei === 0n) return '0 HYPR';
-  const digits = wei.toString().padStart(19, '0');
-  const whole = digits.slice(0, -18).replace(/^0+/, '') || '0';
-  const frac = digits.slice(-18).replace(/0+$/, '');
-  return frac.length > 0 ? `${whole}.${frac} HYPR` : `${whole} HYPR`;
-};
-
 const formatDateIso = (date: Date) => date.toISOString().slice(0, 10);
 
 const roundUpToNextDay = (ms: number) => {
@@ -2047,13 +2102,6 @@ const roundUpToNextDay = (ms: number) => {
     d.setDate(d.getDate() + 1);
   }
   return d;
-};
-
-const formatHyprTotal = (lockedRaw: string | undefined, additionalRaw: string | undefined) => {
-  const locked = lockedRaw ? BigInt(lockedRaw) : 0n;
-  const additional = additionalRaw ? BigInt(additionalRaw) : 0n;
-  const total = locked + additional;
-  return formatHyprAmountUi(total);
 };
 
 const DurationInputs = ({
@@ -2150,7 +2198,7 @@ const DurationInputs = ({
               selected={endDateValue}
               onChange={onEndDateChange}
               dateFormat="yyyy-MM-dd"
-              minDate={undefined}
+              minDate={endDateMin}
               maxDate={endDateMax}
               className="date-picker-input"
               calendarClassName="date-picker-calendar"
@@ -2199,7 +2247,12 @@ const shortHash = (hash: `0x${string}`) => `${hash.slice(0, 8)}…${hash.slice(-
 const formatTimestamp = (seconds: number) => {
   if (!seconds) return '0';
   if (seconds === Number.MAX_SAFE_INTEGER) return 'Unknown';
-  return new Date(seconds * 1000).toLocaleString();
+  const d = new Date(seconds * 1000);
+  const pad = (v: number) => v.toString().padStart(2, '0');
+  const hours24 = d.getHours();
+  const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
+  const ampm = hours24 >= 12 ? 'PM' : 'AM';
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(hours12)}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${ampm}`;
 };
 
 
@@ -2265,5 +2318,13 @@ const secondsUntilDate = (target: Date | null, baseSeconds: number) => {
 };
 
 const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Action failed.');
+
+const formatHyprWei = (wei: bigint) => {
+  if (wei === 0n) return '0 HYPR';
+  const digits = wei.toString().padStart(19, '0');
+  const whole = digits.slice(0, -18).replace(/^0+/, '') || '0';
+  const frac = digits.slice(-18).replace(/0+$/, '');
+  return frac.length > 0 ? `${whole}.${frac} HYPR` : `${whole} HYPR`;
+};
 
 export default App;
