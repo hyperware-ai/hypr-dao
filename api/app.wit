@@ -17,13 +17,9 @@ use standard.{address};
         min-lock-duration-seconds: u64
     }
 
-    record bind-details-view {
-        namehash: string,
-        name: option<string>,
+    record balance-view {
         amount-raw-wei: string,
-        amount-formatted-hypr: string,
-        unlock-timestamp: u64,
-        remaining-seconds: u64
+        amount-formatted-hypr: string
     }
 
     record lock-details-view {
@@ -33,9 +29,13 @@ use standard.{address};
         remaining-seconds: u64
     }
 
-    record balance-view {
+    record bind-details-view {
+        namehash: string,
+        name: option<string>,
         amount-raw-wei: string,
-        amount-formatted-hypr: string
+        amount-formatted-hypr: string,
+        unlock-timestamp: u64,
+        remaining-seconds: u64
     }
 
     // Function signature for: acknowledge-lock-modal (http)
