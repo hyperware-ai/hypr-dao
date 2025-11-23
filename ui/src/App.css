@@ -230,6 +230,23 @@
   overflow-wrap: anywhere;
 }
 
+.lock-card-hint-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.lock-card-hint-value {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+}
+
+.lock-card-hint-sub {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
 .lock-card-divider {
   height: 1px;
   width: 100%;
@@ -269,6 +286,38 @@
 .binding-sub {
   font-size: 0.8rem;
   color: var(--text-secondary);
+}
+
+.bindings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.bindings-sort {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.icon-button {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  padding: 0.2rem 0.45rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.icon-button.active {
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+}
+
+.icon-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .lock-empty {
