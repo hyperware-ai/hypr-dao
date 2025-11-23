@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
@@ -12,6 +12,7 @@ import { App as CallerApp } from '#caller-utils';
 
 type StepId = 'lock' | 'bind';
 type StepIcon = 'check' | 'lock' | 'chain';
+type LockView = 'details' | 'manage' | 'extend';
 
 interface StepConfig {
   id: StepId;
@@ -29,7 +30,7 @@ const steps: StepConfig[] = [
   {
     id: 'lock',
     title: 'Lock',
-    description: 'Commit some or all of your HYPR to the Registry to enable binding.',
+    description: '',
     icon: 'lock',
   },
   {
@@ -265,10 +266,10 @@ function App() {
     initialize,
     fetchLockStatus,
     refreshLockStatus,
-    clearError,
-    acknowledgeLockModal,
+  clearError,
+  acknowledgeLockModal,
 } = useBindAndLockStore();
-const { address, chain, isConnected: isWalletConnected } = useAccount();
+  const { address, chain, isConnected: isWalletConnected } = useAccount();
   const showLockInfoModal = (resume?: () => void) => {
     setLockModalResume(() => (resume ? () => resume() : null));
     setShowLockModal(true);
@@ -277,7 +278,6 @@ const { address, chain, isConnected: isWalletConnected } = useAccount();
     setShowLockModal(false);
     setLockModalResume(null);
   };
-
   const targetRegistryAddress = useMemo(() => {
     if (chain?.id && TOKEN_REGISTRY_ADDRESSES[chain.id]) {
       return TOKEN_REGISTRY_ADDRESSES[chain.id];
@@ -363,9 +363,13 @@ const { address, chain, isConnected: isWalletConnected } = useAccount();
   };
 
   const stepDescription = useMemo(() => {
+    if (activeStep === 'lock') return '';
     return steps.find((step) => step.id === activeStep)?.description ?? '';
   }, [activeStep]);
-  const activeStepTitle = useMemo(() => steps.find((step) => step.id === activeStep)?.title ?? '', [activeStep]);
+  const activeStepTitle = useMemo(() => {
+    if (activeStep === 'lock') return '';
+    return steps.find((step) => step.id === activeStep)?.title ?? '';
+  }, [activeStep]);
 
   return (
     <div className="app">
@@ -569,6 +573,7 @@ const LockStep = ({
   const [durationInputs, setDurationInputs] = useState<DurationInputValues>(() =>
     createDefaultDurationInputsAtLeastMin(minLockDurationSeconds),
   );
+  const [lockView, setLockView] = useState<LockView>('manage');
   const [lockDurationDirty, setLockDurationDirty] = useState(false);
   const [lockDurationMode, setLockDurationMode] = useState<DurationMode>('duration');
   const [lockEndDateInput, setLockEndDateInput] = useState<Date | null>(null);
@@ -588,6 +593,14 @@ const LockStep = ({
   const durationParts = useMemo(() => inputsToDurationParts(durationInputs), [durationInputs]);
   const lockedAmountWei = lockDetails?.amount_raw_wei ? BigInt(lockDetails.amount_raw_wei) : 0n;
   const hasExistingLock = lockedAmountWei > 0n;
+  const hyprOwnedWei = hyprOwned?.amount_raw_wei ? BigInt(hyprOwned.amount_raw_wei) : 0n;
+  useEffect(() => {
+    if (!hasExistingLock && lockView !== 'manage') {
+      setLockView('manage');
+    } else if (hasExistingLock && lockView === 'manage') {
+      setLockView('details');
+    }
+  }, [hasExistingLock, lockView]);
   const lastSyncedDurationSeconds = useRef<number | null>(null);
   useEffect(() => {
     if (!hasExistingLock) {
@@ -632,16 +645,92 @@ const LockStep = ({
     () => new Date((nowSeconds + MAX_LOCK_DURATION_SECONDS) * 1000),
     [nowSeconds],
   );
+  const extendMinMillis = useMemo(() => {
+    const unlockMs = lockDetails?.unlock_timestamp ? lockDetails.unlock_timestamp * 1000 : 0;
+    return Math.max(lockEndDateMin.getTime(), unlockMs);
+  }, [lockDetails, lockEndDateMin]);
   useEffect(() => {
     if (lockDurationMode === 'end-date' && !lockEndDateInput) {
-      setLockEndDateInput(lockEndDateMin);
+      const defaultEndDate = new Date(
+        (nowSeconds + Number(DEFAULT_DURATION_SECONDS)) * 1000,
+      );
+      const minMsForMode =
+        lockView === 'extend' ? extendMinMillis : lockEndDateMin.getTime();
+      const clamped = new Date(
+        Math.min(
+          lockEndDateMax.getTime(),
+          Math.max(minMsForMode, defaultEndDate.getTime()),
+        ),
+      );
+      setLockEndDateInput(clamped);
     }
-  }, [lockDurationMode, lockEndDateInput, lockEndDateMin]);
+  }, [
+    lockDurationMode,
+    lockEndDateInput,
+    lockEndDateMin,
+    lockEndDateMax,
+    nowSeconds,
+    lockView,
+    extendMinMillis,
+  ]);
+  const lockEndDateDisplayMin = useMemo(
+    () => roundUpToNextDay(lockEndDateMin.getTime()),
+    [lockEndDateMin],
+  );
+  const lockEndDateDisplayMax = useMemo(() => {
+    const base = new Date(lockEndDateMax);
+    base.setHours(0, 0, 0, 0);
+    return base;
+  }, [lockEndDateMax]);
+  const extendEndDateDisplayMin = useMemo(
+    () => roundUpToNextDay(extendMinMillis),
+    [extendMinMillis],
+  );
   const lockEndDateDurationSeconds = secondsUntilDate(lockEndDateInput, Math.floor(Date.now() / 1000));
+  const effectiveMode: DurationMode =
+    lockView === 'extend' || lockView === 'manage' ? 'end-date' : lockDurationMode;
+  const [lockEndTimeInput, setLockEndTimeInput] = useState('00:00:00');
+  useEffect(() => {
+    setLockEndTimeInput('00:00:00');
+  }, []);
+  useEffect(() => {
+    if (!lockEndDateInput || !lockEndTimeInput) return;
+    const [h, m, s] = lockEndTimeInput.split(':').map((v) => parseInt(v, 10));
+    if (Number.isNaN(h) || Number.isNaN(m) || Number.isNaN(s)) return;
+    const next = new Date(lockEndDateInput);
+    next.setHours(h, m, s, 0);
+    setLockEndDateInput(next);
+  }, [lockEndTimeInput]);
+  useEffect(() => {
+    if (lockEndDateInput && !lockEndTimeInput) {
+      const h = String(lockEndDateInput.getHours()).padStart(2, '0');
+      const m = String(lockEndDateInput.getMinutes()).padStart(2, '0');
+      const s = String(lockEndDateInput.getSeconds()).padStart(2, '0');
+      setLockEndTimeInput(`${h}:${m}:${s}`);
+    }
+  }, [lockEndDateInput, lockEndTimeInput]);
   const selectedLockDurationSeconds =
-    lockDurationMode === 'duration'
+    effectiveMode === 'duration'
       ? lockDurationSecondsFromInputs
       : lockEndDateDurationSeconds ?? 0n;
+  useEffect(() => {
+    if (effectiveMode !== 'end-date' || lockEndDateInput) {
+      return;
+    }
+    const displayMinDate =
+      lockView === 'extend'
+        ? extendEndDateDisplayMin
+        : lockEndDateDisplayMin;
+    setLockEndDateInput(new Date(displayMinDate));
+    setLockEndTimeInput('00:00:00');
+  }, [
+    effectiveMode,
+    lockEndDateInput,
+    lockView,
+    extendEndDateDisplayMin,
+    lockEndDateDisplayMin,
+    setLockEndTimeInput,
+  ]);
   const lockUnlockPreview = useMemo(() => {
     if (selectedLockDurationSeconds <= 0n) {
       return null;
@@ -745,6 +834,7 @@ const LockStep = ({
       setPendingLock(null);
       void refreshLockStatus();
       onLockUpdated();
+      setLockView('details');
     }
   }, [isManageConfirmed, refreshLockStatus, onLockUpdated, minLockDurationSeconds]);
 
@@ -1023,10 +1113,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     return <></>;
   }
 
-  const lockHeaderTitle = hasExistingLock ? 'Manage lock' : 'Create HYPR lock';
-  const lockHeaderSubtitle = hasExistingLock
-    ? 'Add HYPR to existing locked balance, or extend the current duration (enter 0 for HYPR amount).'
-    : 'Lock an amount of HYPR for a specified duration to use in bindings.';
+  const lockHeaderSubtitle = 'Lock an amount of HYPR for a specified duration to use in bindings.';
   const allowZeroAmount = hasExistingLock;
   const amountProvided = amountInput !== '';
   const amountValue = amountProvided ? Number(amountInput) : 0;
@@ -1044,11 +1131,23 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     lockDetails && hasExistingLock ? BigInt(lockDetails.amount_raw_wei) : 0n;
   const existingDurationSeconds =
     lockDetails && hasExistingLock ? BigInt(lockDetails.remaining_seconds ?? 0) : 0n;
-  const hasValidEndDate = lockDurationMode === 'duration' ? true : Boolean(lockEndDateDurationSeconds);
+  const minEndDateForValidationMs =
+    lockView === 'extend' || (lockView === 'manage' && hasExistingLock)
+      ? extendMinMillis
+      : lockEndDateMin.getTime();
+  const hasValidEndDate =
+    lockDurationMode === 'duration'
+      ? true
+      : Boolean(lockEndDateDurationSeconds) &&
+        Boolean(lockEndDateInput) &&
+        lockEndDateInput!.getTime() >= minEndDateForValidationMs &&
+        lockEndDateInput!.getTime() <= lockEndDateDisplayMax.getTime();
   const zeroAmountExtendingOnly =
     hasExistingLock && additionalAmountWei === 0n && existingDurationSeconds > 0n;
   const durationLessThanExisting =
     zeroAmountExtendingOnly && selectedLockDurationSeconds < existingDurationSeconds;
+  const maxAmountLabel = hyprOwned?.amount_formatted_hypr ?? 'Loading…';
+  const maxAmountWei = hyprOwned?.amount_raw_wei ? BigInt(hyprOwned.amount_raw_wei) : 0n;
   const lockButtonDisabled =
     !walletConnected ||
     isManagePending ||
@@ -1057,6 +1156,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     isAllowanceConfirming ||
     !amountProvided ||
     (!allowZeroAmount && amountValue <= 0) ||
+    (!hasExistingLock && additionalAmountWei > maxAmountWei) ||
     !hasValidEndDate ||
     durationLessThanExisting;
   const showLockFormContent =
@@ -1081,12 +1181,26 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     selectedLockDurationSeconds,
   ]);
 
+  const handleShowManagePanel = useCallback(() => {
+    setLockView('manage');
+    setAmountInput('');
+  }, []);
+
+  const handleShowExtendPanel = useCallback(() => {
+    if (hasExistingLock) {
+      setAmountInput('0');
+      setLockView('extend');
+    }
+  }, [hasExistingLock]);
+
+  const handleShowDetailsPanel = useCallback(() => {
+    if (hasExistingLock) {
+      setLockView('details');
+    }
+  }, [hasExistingLock]);
+
   return (
     <section className="step-card lock-step">
-      <div className="lock-grid">
-        <LockMetric label="HYPR owned" value={hyprOwned?.amount_formatted_hypr ?? 'Loading…'} />
-      </div>
-
       {hasAllowance && tokeregistryAllowance && (
         <div className="lock-grid">
           <div className="warning-card">
@@ -1106,111 +1220,171 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
         </div>
       )}
 
-      <div className="lock-grid">
-        {lockDetails && hasExistingLock ? (
-          <div className="lock-detail-card">
-            <div className="lock-card lock-detail-stat">
-              <span className="lock-card-label">Locked amount</span>
-              <span className="lock-card-value">{lockDetails.amount_formatted_hypr}</span>
-            </div>
-            <div
-              className={`lock-card${
-                lockDetails.remaining_seconds === 0 ? ' expired-card' : ''
-              }`}
-            >
-              <span className="lock-card-label">Unlock timestamp</span>
-              <span className="lock-card-value">{formatTimestamp(lockDetails.unlock_timestamp)}</span>
-              <span className="lock-card-sub">
-                {lockDetails.remaining_seconds === Number.MAX_SAFE_INTEGER
-                  ? 'Unknown remaining time'
-                  : lockDetails.remaining_seconds === 0
-                    ? 'Unlocked'
-                    : `${formatSeconds(lockDetails.remaining_seconds)} remaining`}
-              </span>
-              {lockDetails.remaining_seconds === 0 && (
-                <button
-                  type="button"
-                  className="secondary-button warning-button"
-                  disabled={isWithdrawPending || isWithdrawConfirming}
-                  onClick={handleWithdraw}
-                >
-                  {isWithdrawPending || isWithdrawConfirming ? <span className="spinner" /> : 'Withdraw'}
+      {lockView === 'details' && (
+        <div className="lock-grid">
+          {lockDetails && hasExistingLock ? (
+            <div className="lock-detail-card">
+              <div className="lock-card lock-detail-stat">
+                <span className="lock-card-label">Locked amount</span>
+                <span className="lock-card-value">{lockDetails.amount_formatted_hypr}</span>
+              </div>
+              <div className={`lock-card${lockDetails.remaining_seconds === 0 ? ' expired-card' : ''}`}>
+                <span className="lock-card-label">Lock expires at</span>
+                <span className="lock-card-value">{formatTimestamp(lockDetails.unlock_timestamp)}</span>
+                <span className="lock-card-sub">
+                  {lockDetails.remaining_seconds === Number.MAX_SAFE_INTEGER
+                    ? 'Unknown remaining time'
+                    : lockDetails.remaining_seconds === 0
+                      ? 'Unlocked'
+                      : `${formatSeconds(lockDetails.remaining_seconds)} remaining`}
+                </span>
+                {lockDetails.remaining_seconds === 0 && (
+                  <button
+                    type="button"
+                    className="secondary-button warning-button"
+                    disabled={isWithdrawPending || isWithdrawConfirming}
+                    onClick={handleWithdraw}
+                  >
+                    {isWithdrawPending || isWithdrawConfirming ? <span className="spinner" /> : 'Withdraw'}
+                  </button>
+                )}
+              </div>
+              <div className="lock-detail-actions">
+                <button type="button" className="secondary-button" onClick={handleShowExtendPanel}>
+                Extend lock
+              </button>
+              {hyprOwnedWei > 0n && (
+                <button type="button" className="secondary-button ghost" onClick={handleShowManagePanel}>
+                  Add HYPR to lock
                 </button>
               )}
             </div>
           </div>
         ) : (
-          <div className="lock-empty">
-            <h3>No lock detected</h3>
-            <p>Lock HYPR to enable binding. Once HYPR has been locked it will appear here.</p>
-          </div>
-        )}
-      </div>
+            <div className="lock-empty">
+              <h3>No lock detected</h3>
+              <p>Lock HYPR to enable binding. Once HYPR has been locked it will appear here.</p>
+            </div>
+          )}
+        </div>
+      )}
 
-      <form className="lock-form" onSubmit={handleManageLock}>
-        <div className="form-header">
-          <div className="form-header-text">
-            <h3>{lockHeaderTitle}</h3>
-            <p>{lockHeaderSubtitle}</p>
+      {(lockView === 'manage' || lockView === 'extend') && (
+        <form className="lock-form" onSubmit={handleManageLock}>
+          <div className="form-header">
+            <div className="form-header-text">
+              <h3>
+                {lockView === 'extend'
+                  ? 'Extend lock'
+                : hasExistingLock
+                  ? 'Add HYPR to lock'
+                  : 'Create HYPR lock'}
+              </h3>
+              {lockView === 'manage' && !hasExistingLock && <p>{lockHeaderSubtitle}</p>}
+            </div>
           </div>
-        </div>
-        <div className="input-grid">
-          <label className="input-field">
-            <span>Amount (HYPR)</span>
-            <input
-              type="number"
-              min="0"
-              step="0.000000000000000001"
-              value={amountInput}
-              onChange={(event) => setAmountInput(event.target.value)}
+          {lockView !== 'extend' && (
+            <div className="input-grid">
+              <label className="input-field">
+                <span>
+                  {hasExistingLock
+                    ? `New Total (from ${lockDetails?.amount_formatted_hypr ?? '0 HYPR'} to ${hyprOwned ? `${formatHyprTotal(lockDetails?.amount_raw_wei, hyprOwned.amount_raw_wei)}` : 'Loading…'} HYPR)`
+                    : `Amount (up to ${maxAmountLabel})`}
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.000000000000000001"
+                  value={amountInput}
+                  onChange={(event) => setAmountInput(event.target.value)}
+                />
+              </label>
+            </div>
+          )}
+          {showLockFormContent || lockView === 'extend' ? (
+            <DurationInputs
+              values={durationInputs}
+              onChange={handleLockDurationInputChange}
+              onBlurField={handleLockDurationInputBlur}
+              showPrecision={lockView === 'extend' ? false : showLockPrecision}
+              onTogglePrecision={
+                lockView === 'extend' ? () => {} : () => setShowLockPrecision((prev) => !prev)
+              }
+              durationSeconds={selectedLockDurationSeconds}
+              unlockPreview={lockUnlockPreview}
+              computedDurationLabel={
+                lockView === 'extend'
+                  ? undefined
+                  : hasExistingLock
+                    ? formatSeconds(Number(selectedLockDurationSeconds))
+                    : undefined
+              }
+              computedUnlockLabel={
+                lockView === 'extend'
+                  ? undefined
+                  : hasExistingLock
+                    ? lockUnlockPreview ?? undefined
+                    : undefined
+              }
+              resolvedDurationLabel={
+                lockView === 'extend'
+                  ? undefined
+                  : hasExistingLock && additionalAmountWei > 0n
+                    ? formatSeconds(Number(requiredDurationSeconds))
+                    : undefined
+              }
+              mode={effectiveMode}
+              onModeChange={lockView === 'extend' || lockView === 'manage' ? () => {} : handleLockDurationModeChange}
+              endDateValue={lockEndDateInput}
+              onEndDateChange={handleLockEndDateChange}
+              onEndTimeChange={(value) => setLockEndTimeInput(value)}
+              endTimeValue={lockEndTimeInput}
+              endDateMax={lockEndDateMax}
+              showUnlockPreview={!hasExistingLock && lockView !== 'extend'}
+              durationRangeLabel={
+                lockView === 'manage' && !hasExistingLock
+                  ? `From ${formatDurationSeconds(minLockDurationSeconds)} to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}`
+                  : undefined
+              }
+              endDateRangeLabel={
+                lockView === 'extend'
+                  ? `From ${formatDateIso(extendEndDateDisplayMin)} to ${formatDateIso(lockEndDateDisplayMax)}`
+                  : lockView === 'manage' && !hasExistingLock
+                    ? `From ${formatDateIso(lockEndDateDisplayMin)} to ${formatDateIso(lockEndDateDisplayMax)}`
+                    : undefined
+              }
+              showSummary={false}
+              showModeToggle={false}
             />
-          </label>
-        </div>
-        {showLockFormContent && (
-          <DurationInputs
-            values={durationInputs}
-            onChange={handleLockDurationInputChange}
-            onBlurField={handleLockDurationInputBlur}
-            showPrecision={showLockPrecision}
-            onTogglePrecision={() => setShowLockPrecision((prev) => !prev)}
-            durationSeconds={selectedLockDurationSeconds}
-            unlockPreview={lockUnlockPreview}
-            computedDurationLabel={
-              hasExistingLock ? formatSeconds(Number(selectedLockDurationSeconds)) : undefined
-            }
-            computedUnlockLabel={
-              hasExistingLock ? lockUnlockPreview ?? undefined : undefined
-            }
-            resolvedDurationLabel={
-              hasExistingLock && additionalAmountWei > 0n
-                ? formatSeconds(Number(requiredDurationSeconds))
-                : undefined
-            }
-            mode={lockDurationMode}
-            onModeChange={handleLockDurationModeChange}
-            endDateValue={lockEndDateInput}
-            onEndDateChange={handleLockEndDateChange}
-            endDateMin={lockEndDateMin}
-            endDateMax={lockEndDateMax}
-            showUnlockPreview={!hasExistingLock}
-          />
-        )}
-        <div className="form-actions">
-          <button type="submit" className="secondary-button" disabled={lockButtonDisabled}>
-            {isManagePending || isManageConfirming || isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Lock'}
-          </button>
-        </div>
-        {manageError && (
-          <div className="inline-error" ref={manageErrorRef}>
-            {manageError.text}
+          ) : null}
+          <div className="form-actions">
+            <button type="submit" className="secondary-button" disabled={lockButtonDisabled}>
+              {isManagePending || isManageConfirming || isAllowancePending || isAllowanceConfirming ? (
+                <span className="spinner" />
+              ) : lockView === 'extend'
+                ? 'Extend Lock'
+                : hasExistingLock
+                  ? 'Add HYPR to Lock'
+                  : 'Create Lock'}
+            </button>
+            {hasExistingLock && (
+              <button type="button" className="secondary-button ghost" onClick={handleShowDetailsPanel}>
+                Back to details
+              </button>
+            )}
           </div>
-        )}
-        {manageSuccessHash && (
-          <div className="inline-success" ref={manageSuccessRef}>
-            Lock updated! Tx {shortHash(manageSuccessHash)}
-          </div>
-        )}
-      </form>
+          {manageError && (
+            <div className="inline-error" ref={manageErrorRef}>
+              {manageError.text}
+            </div>
+          )}
+          {manageSuccessHash && (
+            <div className="inline-success" ref={manageSuccessRef}>
+              Lock updated! Tx {shortHash(manageSuccessHash)}
+            </div>
+          )}
+        </form>
+      )}
 
       {lastError && <div className="inline-error">{lastError}</div>}
     </section>
@@ -1807,11 +1981,16 @@ interface DurationInputsProps {
   onModeChange: (mode: DurationMode) => void;
   endDateValue: Date | null;
   onEndDateChange: (value: Date | null) => void;
+  onEndTimeChange?: (value: string) => void;
+  endTimeValue?: string;
   endDateMin?: Date;
   endDateMax?: Date;
   showUnlockPreview?: boolean;
   timestampLabel?: string;
   showSummary?: boolean;
+  durationRangeLabel?: string;
+  endDateRangeLabel?: string;
+  showModeToggle?: boolean;
 }
 
 interface BottomTabsProps {
@@ -1851,6 +2030,32 @@ const iconGlyph: Record<StepIcon, string> = {
   chain: '⛓',
 };
 
+const formatHyprAmountUi = (wei: bigint) => {
+  if (wei === 0n) return '0 HYPR';
+  const digits = wei.toString().padStart(19, '0');
+  const whole = digits.slice(0, -18).replace(/^0+/, '') || '0';
+  const frac = digits.slice(-18).replace(/0+$/, '');
+  return frac.length > 0 ? `${whole}.${frac} HYPR` : `${whole} HYPR`;
+};
+
+const formatDateIso = (date: Date) => date.toISOString().slice(0, 10);
+
+const roundUpToNextDay = (ms: number) => {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  if (d.getTime() < ms) {
+    d.setDate(d.getDate() + 1);
+  }
+  return d;
+};
+
+const formatHyprTotal = (lockedRaw: string | undefined, additionalRaw: string | undefined) => {
+  const locked = lockedRaw ? BigInt(lockedRaw) : 0n;
+  const additional = additionalRaw ? BigInt(additionalRaw) : 0n;
+  const total = locked + additional;
+  return formatHyprAmountUi(total);
+};
+
 const DurationInputs = ({
   values,
   onChange,
@@ -1866,28 +2071,17 @@ const DurationInputs = ({
   onModeChange,
   endDateValue,
   onEndDateChange,
+  onEndTimeChange,
+  endTimeValue,
   endDateMin,
   endDateMax,
   showUnlockPreview = true,
   timestampLabel = 'Unlock timestamp',
   showSummary = true,
+  durationRangeLabel,
+  endDateRangeLabel,
+  showModeToggle = true,
 }: DurationInputsProps) => {
-  const SecondsTimeInput = ({
-    value,
-    onChange,
-  }: {
-    value?: string;
-    onChange?: (event: ChangeEvent<HTMLInputElement>) => void;
-  }) => (
-    <input
-      type="time"
-      step="1"
-      value={value ?? ''}
-      onChange={(event) => onChange?.(event)}
-      className="date-picker-time-input"
-    />
-  );
-
   const renderField = (field: DurationField) => (
     <label className="input-field" key={field}>
       <span>{DURATION_LABELS[field]}</span>
@@ -1908,22 +2102,34 @@ const DurationInputs = ({
 
   return (
     <div className="duration-section">
-      <div className="duration-mode-toggle">
-        <button
-          type="button"
-          className={mode === 'duration' ? 'active' : ''}
-          onClick={() => onModeChange('duration')}
-        >
-          Duration
-        </button>
-        <button
-          type="button"
-          className={mode === 'end-date' ? 'active' : ''}
-          onClick={() => onModeChange('end-date')}
-        >
-          End date
-        </button>
-      </div>
+      {showModeToggle && (
+        <div className="duration-mode-toggle">
+          {mode === 'duration' && (
+            <button
+              type="button"
+              className="active"
+              onClick={() => onModeChange('duration')}
+            >
+              Duration
+            </button>
+          )}
+          {mode === 'end-date' && (
+            <button
+              type="button"
+              className="active"
+              onClick={() => onModeChange('end-date')}
+            >
+              End date
+            </button>
+          )}
+        </div>
+      )}
+      {mode === 'duration' && durationRangeLabel && (
+        <p className="duration-range-sub">{durationRangeLabel}</p>
+      )}
+      {mode === 'end-date' && endDateRangeLabel && (
+        <p className="duration-range-sub">{endDateRangeLabel}</p>
+      )}
       {mode === 'duration' ? (
         <>
           <div className="duration-grid">{BASE_DURATION_FIELDS.map((field) => renderField(field))}</div>
@@ -1937,22 +2143,31 @@ const DurationInputs = ({
           </button>
         </>
       ) : (
-        <label className="input-field">
-          <span>Select end date</span>
-          <DatePicker
-            selected={endDateValue}
-            onChange={onEndDateChange}
-            showTimeInput
-            timeInputLabel="Time"
-            customTimeInput={<SecondsTimeInput />}
-            dateFormat="yyyy-MM-dd HH:mm:ss"
-            minDate={endDateMin}
-            maxDate={endDateMax}
-            className="date-picker-input"
-            calendarClassName="date-picker-calendar"
-            popperClassName="date-picker-popper"
-          />
-        </label>
+        <>
+          <label className="input-field">
+            <span>Select end date</span>
+            <DatePicker
+              selected={endDateValue}
+              onChange={onEndDateChange}
+              dateFormat="yyyy-MM-dd"
+              minDate={undefined}
+              maxDate={endDateMax}
+              className="date-picker-input"
+              calendarClassName="date-picker-calendar"
+              popperClassName="date-picker-popper"
+            />
+          </label>
+          <label className="input-field">
+            <span>Select end time</span>
+            <input
+              type="time"
+              step="1"
+              value={endTimeValue ?? ''}
+              onChange={(event) => onEndTimeChange?.(event.target.value)}
+              className="date-picker-time-input"
+            />
+          </label>
+        </>
       )}
       {showSummary && (
         <div className="duration-summary">
