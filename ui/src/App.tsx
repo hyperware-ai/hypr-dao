@@ -1237,6 +1237,15 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     }
     return extendEndDateDisplayMin;
   }, [addDynamicMinMs, extendEndDateDisplayMin, hasExistingLock, lockView]);
+  const suppressLockHint = useMemo(() => {
+    if (lockView === 'extend') {
+      return extendEndDateDisplayMin.getTime() >= lockEndDateDisplayMax.getTime();
+    }
+    if (lockView === 'manage' && !hasExistingLock) {
+      return lockEndDateDisplayMin.getTime() >= lockEndDateDisplayMax.getTime();
+    }
+    return false;
+  }, [extendEndDateDisplayMin, hasExistingLock, lockEndDateDisplayMax, lockEndDateDisplayMin, lockView]);
 
   const actualMinMsForView = useMemo(
     () => {
@@ -1263,11 +1272,15 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     [actualMinMsForView],
   );
   const defaultEndMsForView = useMemo(() => {
+    const fiveMinutesMs = 5 * 60 * 1000;
+    if (suppressLockHint && (lockView === 'extend' || (lockView === 'manage' && !hasExistingLock))) {
+      return actualMinMsForView + fiveMinutesMs;
+    }
     if (lockView === 'manage' && hasExistingLock && lockDetails?.unlock_timestamp) {
       return lockDetails.unlock_timestamp * 1000;
     }
     return displayMinDateForHint.getTime();
-  }, [displayMinDateForHint, hasExistingLock, lockDetails?.unlock_timestamp, lockView]);
+  }, [actualMinMsForView, displayMinDateForHint, hasExistingLock, lockDetails?.unlock_timestamp, lockView, suppressLockHint]);
 
   const minEndDateForValidationMs =
     lockView === 'extend'
@@ -1528,9 +1541,9 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                   : undefined
               }
               endDateRangeLabel={
-                lockView === 'extend'
+                lockView === 'extend' && !suppressLockHint
                   ? `From ${formatDateIso(extendEndDateDisplayMin)} to ${formatDateIso(lockEndDateDisplayMax)}`
-                  : lockView === 'manage' && !hasExistingLock
+                  : lockView === 'manage' && !hasExistingLock && !suppressLockHint
                     ? `From ${formatDateIso(lockEndDateDisplayMin)} to ${formatDateIso(lockEndDateDisplayMax)}`
                     : lockView === 'manage' && hasExistingLock
                       ? addRangeLabel
@@ -1626,12 +1639,13 @@ const BindStep = ({
   const [showTransferPrecision, setShowTransferPrecision] = useState(false);
   const [transferError, setTransferError] = useState<BannerMessage | null>(null);
   const [transferSuccessHash, setTransferSuccessHash] = useState<`0x${string}` | null>(null);
-  const [bindView, setBindView] = useState<'details' | 'create' | 'add' | 'extend'>(
+  const [bindView, setBindView] = useState<'details' | 'create' | 'add' | 'extend' | 'add-hypr'>(
     bindings.length > 0 ? 'details' : 'create',
   );
   const [userSetBindView, setUserSetBindView] = useState(false);
   const [bindingsSort, setBindingsSort] = useState<'name-asc' | 'name-desc' | 'expiry-asc' | 'expiry-desc'>('name-asc');
   const [extendBindingName, setExtendBindingName] = useState<string | null>(null);
+  const [addHyprBindingName, setAddHyprBindingName] = useState<string | null>(null);
   const [extendBindingUnlockMs, setExtendBindingUnlockMs] = useState<number | null>(null);
   const transferErrorIdRef = useRef(0);
   const transferErrorRef = useRef<HTMLDivElement | null>(null);
@@ -1684,10 +1698,12 @@ const BindStep = ({
     if (!userSetBindView) {
       setBindView(hasBindings ? 'details' : 'create');
       setExtendBindingName(null);
+      setAddHyprBindingName(null);
     }
     if (!hasBindings && bindView === 'details') {
       setBindView('create');
       setExtendBindingName(null);
+      setAddHyprBindingName(null);
     }
   }, [bindView, hasBindings, userSetBindView]);
 
@@ -1735,25 +1751,46 @@ const BindStep = ({
     () => new Date((transferNowSeconds + minLockDurationSeconds) * 1000),
     [transferNowSeconds, minLockDurationSeconds],
   );
-  const transferEndDateMax = useMemo(
+  const transferEndDateMaxFallback = useMemo(
     () => new Date((transferNowSeconds + MAX_LOCK_DURATION_SECONDS) * 1000),
     [transferNowSeconds],
   );
+  const lockExpiryMs = lockDetails?.unlock_timestamp ? lockDetails.unlock_timestamp * 1000 : null;
+  const transferEndDateMax = useMemo(
+    () => (lockExpiryMs !== null ? new Date(lockExpiryMs) : transferEndDateMaxFallback),
+    [lockExpiryMs, transferEndDateMaxFallback],
+  );
   const effectiveTransferEndDateMinMs = useMemo(() => {
     if (bindView === 'extend' && extendBindingUnlockMs !== null) {
-      return Math.max(transferEndDateMin.getTime(), extendBindingUnlockMs);
+      return extendBindingUnlockMs;
     }
     return transferEndDateMin.getTime();
   }, [bindView, extendBindingUnlockMs, transferEndDateMin]);
-  const effectiveTransferEndDateMin = useMemo(
-    () => new Date(effectiveTransferEndDateMinMs),
-    [effectiveTransferEndDateMinMs],
+  const effectiveTransferEndDateMaxMs = useMemo(
+    () => transferEndDateMax.getTime(),
+    [transferEndDateMax],
   );
+  const effectiveTransferEndDateDefault = useMemo(() => {
+    if (bindView === 'add-hypr') return null;
+    return new Date(effectiveTransferEndDateMaxMs);
+  }, [bindView, effectiveTransferEndDateMaxMs]);
+  const bindHintMinMs = useMemo(() => {
+    if (bindView === 'extend') return effectiveTransferEndDateMinMs;
+    if (bindView === 'add') return transferEndDateMin.getTime();
+    if (bindView === 'create') return transferEndDateMin.getTime();
+    return 0;
+  }, [bindView, effectiveTransferEndDateMinMs, transferEndDateMin]);
+  const bindHintMaxMs = useMemo(() => {
+    if (bindView === 'extend') return effectiveTransferEndDateMaxMs;
+    if (bindView === 'add' || bindView === 'create') return effectiveTransferEndDateMaxMs;
+    return 0;
+  }, [bindView, effectiveTransferEndDateMaxMs]);
   useEffect(() => {
-    if (!transferEndDateInput) {
-      setTransferEndDateInput(effectiveTransferEndDateMin);
+    if (bindView === 'add-hypr') return;
+    if (!transferEndDateInput && effectiveTransferEndDateDefault) {
+      setTransferEndDateInput(effectiveTransferEndDateDefault);
     }
-  }, [effectiveTransferEndDateMin, transferEndDateInput]);
+  }, [bindView, effectiveTransferEndDateDefault, transferEndDateInput]);
 
   useEffect(() => {
     if (!transferEndDateInput || !transferEndTimeInput) return;
@@ -1777,7 +1814,9 @@ const BindStep = ({
     if (!lockDetails) {
       lastTransferSyncedSeconds.current = null;
       if (!transferDurationDirty) {
-        setTransferEndDateInput(effectiveTransferEndDateMin);
+        if (bindView !== 'add-hypr' && effectiveTransferEndDateDefault) {
+          setTransferEndDateInput(effectiveTransferEndDateDefault);
+        }
         setTransferEndTimeDirty(false);
       }
       return;
@@ -1799,15 +1838,32 @@ const BindStep = ({
   useEffect(() => {
     setTransferDurationDirty(false);
     setTransferDurationMode('end-date');
-    setTransferEndDateInput(effectiveTransferEndDateMin);
+    if (bindView !== 'add-hypr' && effectiveTransferEndDateDefault) {
+      setTransferEndDateInput(effectiveTransferEndDateDefault);
+    }
     setTransferEndTimeDirty(false);
     lastTransferSyncedSeconds.current = null;
-  }, [lockUpdateNonce, minLockDurationSeconds, effectiveTransferEndDateMin]);
+  }, [bindView, effectiveTransferEndDateDefault, lockUpdateNonce, minLockDurationSeconds]);
   const transferEndDateDurationSeconds = secondsUntilDate(transferEndDateInput, transferNowSeconds);
   const selectedTransferDurationSeconds = transferEndDateDurationSeconds ?? 0n;
   const destinationHash = useMemo(() => resolveNamehash(dstNameInput), [dstNameInput]);
   const destinationIsDefault = destinationHash === ZERO_NAMEHASH;
-  const hasTransferValidEndDate = destinationIsDefault ? false : Boolean(transferEndDateDurationSeconds);
+  const hasTransferValidEndDate = useMemo(() => {
+    if (bindView === 'add-hypr') return true;
+    if (destinationIsDefault) return false;
+    if (!transferEndDateInput) return false;
+    const ms = transferEndDateInput.getTime();
+    if (ms < effectiveTransferEndDateMinMs) return false;
+    if (ms > effectiveTransferEndDateMaxMs) return false;
+    return Boolean(transferEndDateDurationSeconds);
+  }, [
+    bindView,
+    destinationIsDefault,
+    effectiveTransferEndDateMaxMs,
+    effectiveTransferEndDateMinMs,
+    transferEndDateDurationSeconds,
+    transferEndDateInput,
+  ]);
   const transferUnlockPreview = useMemo(() => {
     if (selectedTransferDurationSeconds <= 0n) {
       return null;
@@ -1819,6 +1875,7 @@ const BindStep = ({
   const transferAmountValue = transferAmountProvided ? Number(transferAmountInput) : NaN;
   const transferAmountIsValid = transferAmountProvided && Number.isFinite(transferAmountValue);
   const shouldShowTransferEndInputs =
+    bindView !== 'add-hypr' &&
     transferAmountIsValid &&
     dstNameInput.trim().length > 0 &&
     (transferAmountValue > 0 || bindView === 'extend');
@@ -1826,10 +1883,10 @@ const BindStep = ({
     !walletConnected ||
     isTransferPending ||
     isTransferConfirming ||
-    !hasTransferValidEndDate ||
+    (!hasTransferValidEndDate && bindView !== 'add-hypr') ||
     !transferAmountProvided ||
     !transferAmountIsValid ||
-    (transferAmountValue <= 0 && bindView !== 'extend') ||
+    (transferAmountValue <= 0 && bindView !== 'extend' && bindView !== 'add-hypr') ||
     dstNameInput.trim().length === 0;
 
   const pushTransferError = (message: string) => {
@@ -1984,10 +2041,24 @@ const BindStep = ({
       pushTransferError('Destination name is unknown. Please choose a registered name.');
       return;
     }
+    const targetBinding =
+      bindView === 'add-hypr' || bindView === 'extend'
+        ? bindings.find((binding) => binding.namehash.toLowerCase() === dstHash.toLowerCase())
+        : undefined;
+    if (bindView === 'add-hypr') {
+      if (!targetBinding) {
+        pushTransferError('Binding not found to add HYPR.');
+        return;
+      }
+      if ((targetBinding.remaining_seconds ?? 0) === 0) {
+        pushTransferError('Cannot add HYPR to an expired binding.');
+        return;
+      }
+    }
     const bindingExists = bindings.some(
       (binding) => binding.namehash.toLowerCase() === dstHash.toLowerCase(),
     );
-    if (bindingExists && bindView !== 'extend') {
+    if (bindingExists && bindView !== 'extend' && bindView !== 'add-hypr') {
       pushTransferError('A binding already exists for this name.');
       return;
     }
@@ -2000,24 +2071,26 @@ const BindStep = ({
       }
     }
 
-    if (!transferEndDateInput) {
-      pushTransferError('Select an end date.');
-      return;
-    }
-    if (!transferEndDateDurationSeconds) {
-      pushTransferError('Select an end date within the allowed range.');
-      return;
-    }
+    if (bindView !== 'add-hypr') {
+      if (!transferEndDateInput) {
+        pushTransferError('Select an end date.');
+        return;
+      }
+      if (!transferEndDateDurationSeconds) {
+        pushTransferError('Select an end date within the allowed range.');
+        return;
+      }
 
-    if (selectedTransferDurationSeconds < minDurationSecondsBigInt) {
-      pushTransferError(`Duration must be at least ${formatDurationSeconds(minLockDurationSeconds)}.`);
-      return;
-    }
-    if (selectedTransferDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
-      pushTransferError(
-        `Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`,
-      );
-      return;
+      if (selectedTransferDurationSeconds < minDurationSecondsBigInt) {
+        pushTransferError(`Duration must be at least ${formatDurationSeconds(minLockDurationSeconds)}.`);
+        return;
+      }
+      if (selectedTransferDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
+        pushTransferError(
+          `Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`,
+        );
+        return;
+      }
     }
 
     try {
@@ -2032,7 +2105,10 @@ const BindStep = ({
         return;
       }
 
-      const durationForSubmission = selectedTransferDurationSeconds;
+      let durationForSubmission = selectedTransferDurationSeconds;
+      if (bindView === 'add-hypr' && targetBinding) {
+        durationForSubmission = BigInt(targetBinding.remaining_seconds ?? 0);
+      }
       await writeTransferContract({
         address: targetRegistryAddress,
         abi: transferRegistrationAbi,
@@ -2119,15 +2195,32 @@ const BindStep = ({
                             setExtendBindingUnlockMs(
                               binding.unlock_timestamp ? binding.unlock_timestamp * 1000 : null,
                             );
-                            setTransferEndDateInput(
-                              binding.unlock_timestamp
-                                ? new Date(binding.unlock_timestamp * 1000)
-                                : effectiveTransferEndDateMin,
-                            );
+                            if (effectiveTransferEndDateDefault) {
+                              setTransferEndDateInput(effectiveTransferEndDateDefault);
+                            }
                             setTransferEndTimeDirty(false);
                           }}
                         >
                           Extend binding
+                        </button>
+                      )}
+                      {!expired && (
+                        <button
+                          type="button"
+                          className="link-button"
+                          onClick={() => {
+                            const bindingName = binding.name ?? '';
+                            setUserSetBindView(true);
+                            setBindView('add-hypr');
+                            setAddHyprBindingName(bindingName);
+                            setDstNameInput(bindingName);
+                            setTransferAmountInput('');
+                            setTransferDurationDirty(false);
+                            setTransferEndDateInput(null);
+                            setTransferEndTimeDirty(false);
+                          }}
+                        >
+                          Add HYPR
                         </button>
                       )}
                       {expired && (
@@ -2159,20 +2252,23 @@ const BindStep = ({
               setBindView('add');
             }}
           >
-            Add binding
+            Add new binding
           </button>
         </div>
       )}
 
-      {(bindView === 'create' || bindView === 'add' || bindView === 'extend') && (
+      {(bindView === 'create' || bindView === 'add' || bindView === 'extend' || bindView === 'add-hypr') && (
         <form className="lock-form" onSubmit={handleTransfer}>
-          {bindView === 'extend' && extendBindingName && (
+          <div className="form-header">
             <div className="form-header-text">
-              <p>Extend {extendBindingName} binding</p>
+              {bindView === 'extend' && extendBindingName && <h3>Extend {extendBindingName} binding</h3>}
+              {bindView === 'add-hypr' && addHyprBindingName && <h3>Add HYPR to {addHyprBindingName} binding</h3>}
+              {bindView === 'create' && <h3>Create first binding</h3>}
+              {bindView === 'add' && <h3>Add new binding</h3>}
             </div>
-          )}
+          </div>
 
-          {bindView !== 'extend' && (
+          {bindView !== 'extend' && bindView !== 'add-hypr' && (
             <div className="input-grid">
               <label className="input-field">
                 <span>Binding target</span>
@@ -2196,14 +2292,45 @@ const BindStep = ({
               </label>
             </div>
           )}
+          {bindView === 'add-hypr' && (
+            <>
+              <input type="hidden" value={dstNameInput} readOnly />
+              <div className="input-grid">
+                <label className="input-field">
+                  <span>Amount to add (HYPR)</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.000000000000000001"
+                    value={transferAmountInput}
+                    onChange={(event) => setTransferAmountInput(event.target.value)}
+                    required
+                  />
+                </label>
+              </div>
+              {addHyprBindingName && Number(transferAmountInput) > 0 && (
+                <div className="lock-card-sub">
+                  New total amount bound to {addHyprBindingName}:{' '}
+                  {`${Number(transferAmountInput) + (bindings.find((b) => b.name === addHyprBindingName)?.amount_formatted_hypr
+                    ? Number(bindings.find((b) => b.name === addHyprBindingName)!.amount_formatted_hypr.split(' ')[0])
+                    : 0)} HYPR`}
+                </div>
+              )}
+            </>
+          )}
           {bindView === 'extend' && (
             <>
               <input type="hidden" value={dstNameInput} readOnly />
               <input type="hidden" value={transferAmountInput} readOnly />
             </>
           )}
+          {bindView === 'add-hypr' && (
+            <>
+              <input type="hidden" value={dstNameInput} readOnly />
+            </>
+          )}
 
-          {shouldShowTransferEndInputs && (
+      {shouldShowTransferEndInputs && (
         <DurationInputs
           values={transferDurationInputs}
           onChange={handleTransferDurationInputChange}
@@ -2226,9 +2353,9 @@ const BindStep = ({
           showSummary={false}
           showUnlockPreview={false}
           endDateRangeLabel={
-            bindView === 'extend'
-              ? `From ${formatDateIso(roundUpToNextDay(effectiveTransferEndDateMin.getTime()))} to ${formatDateIso(
-                  roundDownToDay(transferEndDateMax.getTime()),
+            roundUpToNextDay(bindHintMinMs).getTime() < roundDownToDay(bindHintMaxMs).getTime()
+              ? `From ${formatDateIso(roundUpToNextDay(bindHintMinMs))} to ${formatDateIso(
+                  roundDownToDay(bindHintMaxMs),
                 )}`
               : undefined
           }
@@ -2242,7 +2369,9 @@ const BindStep = ({
               ) : bindView === 'extend' ? (
                 'Update binding'
               ) : bindView === 'add' ? (
-                'Add new binding'
+                'Create binding'
+              ) : bindView === 'add-hypr' ? (
+                'Update binding'
               ) : (
                 'Create binding'
               )}
