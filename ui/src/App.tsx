@@ -94,7 +94,6 @@ const transferRegistrationAbi = [
   },
 ] as const;
 
-const DEFAULT_MIN_LOCK_DURATION_SECONDS = 4 * 7 * 24 * 60 * 60; // 4 weeks
 const MAX_LOCK_DURATION_SECONDS = 4 * 52 * 7 * 24 * 60 * 60; // ~4 years
 const ZERO_NAMEHASH = '0x0000000000000000000000000000000000000000000000000000000000000000' as const;
 const CHAIN_LABELS: Record<number, string> = {
@@ -268,7 +267,10 @@ function App() {
     refreshLockStatus,
     clearError,
     acknowledgeLockModal,
+    minLockDurationSeconds: minLockDurationSecondsRaw,
   } = useBindAndLockStore();
+  const minLockDurationReady = minLockDurationSecondsRaw !== null;
+  const minLockDurationSeconds = minLockDurationSecondsRaw!;
   const lockExpired =
     lockDetails !== null &&
     BigInt(lockDetails.amount_raw_wei ?? '0') > 0n &&
@@ -305,8 +307,6 @@ function App() {
   const expectedChainName = CHAIN_LABELS[expectedChainId] ?? `Chain ${expectedChainId}`;
   const networkMismatch =
     walletConnected && chain?.id !== undefined && chain.id !== expectedChainId;
-  const minLockDurationSeconds =
-    useBindAndLockStore((state) => state.minLockDurationSeconds) ?? DEFAULT_MIN_LOCK_DURATION_SECONDS;
   const environmentReady = !walletMismatch && !networkMismatch;
   const connectComplete = Boolean(isConnected && nodeId && walletConnected);
   const hyprOwnedWei = hyprOwned?.amount_raw_wei ? BigInt(hyprOwned.amount_raw_wei) : 0n;
@@ -438,43 +438,56 @@ function App() {
                 </div>
 
                 <main className="step-content">
-                  {activeStep === 'lock' && (
-                    <LockStep
-                      connectComplete={connectComplete}
-                      nodeId={nodeId}
-                      ownerAddress={ownerAddress}
-                      lockDetails={lockDetails}
-                      hyprOwned={hyprOwned}
-                      hyprApproved={hyprApproved}
-                      tokeregistryAllowance={tokeregistryAllowance}
-                      availableToBind={availableToBind}
-                      hyprTokenAddress={hyprTokenAddress}
-                      lastError={lastError}
-                      isLoading={isLoading}
-                      refreshLockStatus={refreshLockStatus}
-                      walletConnected={walletConnected}
-                      walletAddress={address}
-                      targetRegistryAddress={targetRegistryAddress}
-                      hasSeenLockModal={lockModalSeen}
-                      onRequireLockInfo={(resume) => showLockInfoModal(resume)}
-                      minLockDurationSeconds={minLockDurationSeconds}
-                      onLockUpdated={handleLockUpdated}
-                    />
-                  )}
+                  {!minLockDurationReady ? (
+                    <div className="lock-grid">
+                      <div className="lock-card">
+                        <span className="lock-card-label">Loading lock rules…</span>
+                        <span className="lock-card-value">
+                          <span className="spinner" />
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {activeStep === 'lock' && (
+                        <LockStep
+                          connectComplete={connectComplete}
+                          nodeId={nodeId}
+                          ownerAddress={ownerAddress}
+                          lockDetails={lockDetails}
+                          hyprOwned={hyprOwned}
+                          hyprApproved={hyprApproved}
+                          tokeregistryAllowance={tokeregistryAllowance}
+                          availableToBind={availableToBind}
+                          hyprTokenAddress={hyprTokenAddress}
+                          lastError={lastError}
+                          isLoading={isLoading}
+                          refreshLockStatus={refreshLockStatus}
+                          walletConnected={walletConnected}
+                          walletAddress={address}
+                          targetRegistryAddress={targetRegistryAddress}
+                          hasSeenLockModal={lockModalSeen}
+                          onRequireLockInfo={(resume) => showLockInfoModal(resume)}
+                          minLockDurationSeconds={minLockDurationSeconds}
+                          onLockUpdated={handleLockUpdated}
+                        />
+                      )}
 
-                  {activeStep === 'bind' && (
-                    <BindStep
-                      connectComplete={connectComplete}
-                      walletConnected={walletConnected}
-                      walletAddress={address}
-                      targetRegistryAddress={targetRegistryAddress}
-                      availableToBind={availableToBind}
-                      lockDetails={lockDetails}
-                      bindings={bindings}
-                      refreshLockStatus={refreshLockStatus}
-                      minLockDurationSeconds={minLockDurationSeconds}
-                      lockUpdateNonce={lockUpdateNonce}
-                    />
+                      {activeStep === 'bind' && (
+                        <BindStep
+                          connectComplete={connectComplete}
+                          walletConnected={walletConnected}
+                          walletAddress={address}
+                          targetRegistryAddress={targetRegistryAddress}
+                          availableToBind={availableToBind}
+                          lockDetails={lockDetails}
+                          bindings={bindings}
+                          refreshLockStatus={refreshLockStatus}
+                          minLockDurationSeconds={minLockDurationSeconds}
+                          lockUpdateNonce={lockUpdateNonce}
+                        />
+                      )}
+                    </>
                   )}
                 </main>
               </>
@@ -831,8 +844,12 @@ const LockStep = ({
   }, [txNotice]);
 
   useEffect(() => {
-    if (manageError) {
-      manageErrorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (manageError && manageErrorRef.current) {
+      const rect = manageErrorRef.current.getBoundingClientRect();
+      const fullyInView = rect.top >= 0 && rect.bottom <= window.innerHeight;
+      if (!fullyInView) {
+        manageErrorRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
     }
   }, [manageError]);
 
@@ -879,8 +896,12 @@ const LockStep = ({
   }, [manageSuccessHash]);
 
   useEffect(() => {
-    if (manageSuccessHash) {
-      manageSuccessRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (manageSuccessHash && manageSuccessRef.current) {
+      const rect = manageSuccessRef.current.getBoundingClientRect();
+      const fullyInView = rect.top >= 0 && rect.bottom <= window.innerHeight;
+      if (!fullyInView) {
+        manageSuccessRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
     }
   }, [manageSuccessHash]);
 
@@ -1133,6 +1154,15 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
   const allowZeroAmount = lockView === 'extend';
   const amountProvided = amountInput !== '';
   const amountValue = amountProvided ? Number(amountInput) : 0;
+  useEffect(() => {
+    // When min duration arrives from the backend (or changes), refresh defaults for the initial create flow
+    if (!hasExistingLock && lockView === 'manage' && !lockDurationDirty && !amountProvided) {
+      setDurationInputs(createDefaultDurationInputsAtLeastMin(minLockDurationSeconds));
+      setLockEndDateInput(null);
+      setLockEndTimeInput('00:00:00');
+      setLockEndTimeDirty(false);
+    }
+  }, [amountProvided, hasExistingLock, lockDurationDirty, lockView, minLockDurationSeconds]);
   const additionalAmountWei = useMemo(() => {
     if (!amountProvided) {
       return 0n;
@@ -1739,8 +1769,12 @@ const BindStep = ({
   }, [transferError]);
 
   useEffect(() => {
-    if (transferError) {
-      transferErrorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (transferError && transferErrorRef.current) {
+      const rect = transferErrorRef.current.getBoundingClientRect();
+      const fullyInView = rect.top >= 0 && rect.bottom <= window.innerHeight;
+      if (!fullyInView) {
+        transferErrorRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
     }
   }, [transferError]);
 
@@ -1995,8 +2029,12 @@ const BindStep = ({
   }, [transferSuccessHash]);
 
   useEffect(() => {
-    if (transferSuccessHash) {
-      transferSuccessRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (transferSuccessHash && transferSuccessRef.current) {
+      const rect = transferSuccessRef.current.getBoundingClientRect();
+      const fullyInView = rect.top >= 0 && rect.bottom <= window.innerHeight;
+      if (!fullyInView) {
+        transferSuccessRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
     }
   }, [transferSuccessHash]);
 
@@ -2181,52 +2219,52 @@ const BindStep = ({
                           : `Unbinds ${formatTimestamp(binding.unlock_timestamp)}`}
                       </div>
                       {!expired && (
-                        <button
-                          type="button"
-                          className="link-button"
-                          onClick={() => {
-                            setUserSetBindView(true);
-                            setBindView('extend');
-                            const bindingName = binding.name ?? '';
-                            setExtendBindingName(bindingName);
-                            setDstNameInput(bindingName);
-                            setTransferAmountInput('0');
-                            setTransferDurationDirty(false);
-                            setExtendBindingUnlockMs(
-                              binding.unlock_timestamp ? binding.unlock_timestamp * 1000 : null,
-                            );
-                            if (effectiveTransferEndDateDefault) {
-                              setTransferEndDateInput(effectiveTransferEndDateDefault);
-                            }
-                            setTransferEndTimeDirty(false);
-                          }}
-                        >
-                          Extend binding
-                        </button>
-                      )}
-                      {!expired && (
-                        <button
-                          type="button"
-                          className="link-button"
-                          onClick={() => {
-                            const bindingName = binding.name ?? '';
-                            setUserSetBindView(true);
-                            setBindView('add-hypr');
-                            setAddHyprBindingName(bindingName);
-                            setDstNameInput(bindingName);
-                            setTransferAmountInput('');
-                            setTransferDurationDirty(false);
-                            setTransferEndDateInput(null);
-                            setTransferEndTimeDirty(false);
-                          }}
-                        >
-                          Add HYPR
-                        </button>
+                        <div className="binding-actions">
+                          <button
+                            type="button"
+                            className="pill-button"
+                            onClick={() => {
+                              setUserSetBindView(true);
+                              setBindView('extend');
+                              const bindingName = binding.name ?? '';
+                              setExtendBindingName(bindingName);
+                              setDstNameInput(bindingName);
+                              setTransferAmountInput('0');
+                              setTransferDurationDirty(false);
+                              setExtendBindingUnlockMs(
+                                binding.unlock_timestamp ? binding.unlock_timestamp * 1000 : null,
+                              );
+                              if (effectiveTransferEndDateDefault) {
+                                setTransferEndDateInput(effectiveTransferEndDateDefault);
+                              }
+                              setTransferEndTimeDirty(false);
+                            }}
+                          >
+                            Extend binding
+                          </button>
+                          <button
+                            type="button"
+                            className="pill-button"
+                            onClick={() => {
+                              const bindingName = binding.name ?? '';
+                              setUserSetBindView(true);
+                              setBindView('add-hypr');
+                              setAddHyprBindingName(bindingName);
+                              setDstNameInput(bindingName);
+                              setTransferAmountInput('');
+                              setTransferDurationDirty(false);
+                              setTransferEndDateInput(null);
+                              setTransferEndTimeDirty(false);
+                            }}
+                          >
+                            Add HYPR
+                          </button>
+                        </div>
                       )}
                       {expired && (
                         <button
                           type="button"
-                          className="secondary-button warning-button"
+                          className="pill-button warning-pill"
                           disabled={isTransferPending || isTransferConfirming}
                           onClick={() => handleReclaimBinding(binding)}
                         >
@@ -2392,35 +2430,18 @@ const BindStep = ({
         </form>
       )}
 
-      {bindView === 'details' && (
-        <>
-          {transferError && (
-            <div className="inline-error" ref={transferErrorRef}>
-              {transferError.text}
-            </div>
-          )}
-          {transferSuccessHash && (
-            <div className="inline-success" ref={transferSuccessRef}>
-              Binding updated! Tx {shortHash(transferSuccessHash)}
-            </div>
-          )}
-        </>
-      )}
-
-      {(bindView === 'create' || bindView === 'add') && (
-        <>
-          {transferError && (
-            <div className="inline-error" ref={transferErrorRef}>
-              {transferError.text}
-            </div>
-          )}
-          {transferSuccessHash && (
-            <div className="inline-success" ref={transferSuccessRef}>
-              Binding updated! Tx {shortHash(transferSuccessHash)}
-            </div>
-          )}
-        </>
-      )}
+      <div className="inline-message-slot">
+        {transferError && (
+          <div className="inline-error" ref={transferErrorRef}>
+            {transferError.text}
+          </div>
+        )}
+        {transferSuccessHash && (
+          <div className="inline-success" ref={transferSuccessRef}>
+            Binding updated! Tx {shortHash(transferSuccessHash)}
+          </div>
+        )}
+      </div>
     </section>
   );
 };

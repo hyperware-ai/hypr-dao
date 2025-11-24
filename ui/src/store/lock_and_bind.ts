@@ -58,14 +58,14 @@ export const useBindAndLockStore = create<LockAndBindStore>((set, get) => ({
   },
 
   refreshLockStatus: async () => {
-    set({ isLoading: true, error: null });
+    // Keep refresh silent to avoid UI jitter on periodic polls
+    set({ error: null });
     try {
       const status = await App.refresh_lock_status();
       applyStatus(status, set);
     } catch (error) {
       set({
         error: getErrorMessage(error),
-        isLoading: false,
       });
     }
   },
