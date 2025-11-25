@@ -515,7 +515,6 @@ function App() {
               <li><strong>Lock HYPR:</strong> Moves the approved HYPR into the Registry contract for the duration you choose (between 4 weeks and 4 years).</li>
             </ol>
             <p>
-              You may only need to confirm one transaction if you have previously approved sufficient transfer rights to the Registry contract. Under normal circumstances, you will need to approve the amount of HYPR you are attempting to lock (transaction #1) and tell the Registry contract to take possession of it (transaction #2).
               <strong> After these transactions, the HYPR will be kept under the control of the Registry contract for the duration of the lock.</strong>&nbsp;
               Double-check your amount and duration before confirming the transactions.
             </p>
