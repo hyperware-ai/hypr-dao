@@ -2312,6 +2312,7 @@ const BindStep = ({
                 <input
                   type="text"
                   placeholder="example.name.os"
+                  autoCapitalize="none"
                   value={dstNameInput}
                   onChange={(event) => setDstNameInput(event.target.value)}
                 />
