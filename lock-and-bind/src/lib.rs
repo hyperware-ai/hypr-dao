@@ -197,6 +197,8 @@ impl AppState {
     }
 
     fn refresh_lock_state(&mut self) -> Result<(), String> {
+        // For production, always re-resolve the owner to avoid stale cache; simulation-mode keeps the existing shortcut.
+        #[cfg(feature = "simulation-mode")]
         let owner = match self.owner_address.clone() {
             Some(addr) if !addr.is_empty() => EthAddress::from_str(&addr)
                 .map_err(|_| "cached owner address invalid".to_string())?,
@@ -205,6 +207,12 @@ impl AppState {
                 self.owner_address = Some(resolved.to_string());
                 resolved
             }
+        };
+        #[cfg(not(feature = "simulation-mode"))]
+        let owner = {
+            let resolved = Self::resolve_owner_address()?;
+            self.owner_address = Some(resolved.to_string());
+            resolved
         };
         let bindings = Self::bindings_client()?;
         let details = bindings
