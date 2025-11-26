@@ -111,6 +111,7 @@ const SECONDS_PER_WEEK = 7 * SECONDS_PER_DAY;
 const SECONDS_PER_MONTH = 30 * SECONDS_PER_DAY;
 const SECONDS_PER_YEAR = 365 * SECONDS_PER_DAY;
 const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
+const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 
 type DurationField = 'years' | 'months' | 'weeks' | 'days' | 'hours' | 'minutes' | 'seconds';
 type DurationMode = 'duration' | 'end-date';
@@ -257,16 +258,8 @@ const buildSpecialDateOptions = () => {
 };
 
 const useIsMobile = () => {
-  const [isMobile, setIsMobile] = useState(false);
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const mq = window.matchMedia('(max-width: 640px)');
-    const update = () => setIsMobile(mq.matches);
-    update();
-    mq.addEventListener('change', update);
-    return () => mq.removeEventListener('change', update);
-  }, []);
-  return isMobile;
+  // Force mobile experience on all clients
+  return true;
 };
 
 type DurationParts = Record<DurationField, number>;
@@ -786,6 +779,10 @@ const LockStep = ({
   const [showLockPrecision, setShowLockPrecision] = useState(false);
   const [lockMobileDuration, setLockMobileDuration] = useState<string>('');
   const [lockMobileDateChoice, setLockMobileDateChoice] = useState<string | null>(null);
+  const [showLockCustomModal, setShowLockCustomModal] = useState(false);
+  const [lockCustomDateMs, setLockCustomDateMs] = useState<number | null>(null);
+  const [lockCustomModalDate, setLockCustomModalDate] = useState<string>('');
+  const [lockCustomModalTime, setLockCustomModalTime] = useState<string>('');
   const [manageError, setManageError] = useState<BannerMessage | null>(null);
   const [txNotice, setTxNotice] = useState<BannerMessage & { kind: 'success' | 'error' } | null>(
     null,
@@ -1353,6 +1350,40 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     await submitLockRequest();
   };
 
+  const handleLockCustomCancel = () => {
+    setShowLockCustomModal(false);
+    setLockCustomDateMs(null);
+    setLockMobileDateChoice('');
+    setLockEndDateInput(null);
+    setLockEndTimeInput('00:00:00');
+    setLockEndTimeDirty(false);
+    setLockDurationDirty(false);
+  };
+
+  const handleLockCustomSet = () => {
+    if (!lockCustomModalDate || !lockCustomModalTime) {
+      setShowLockCustomModal(false);
+      return;
+    }
+    const candidate = new Date(`${lockCustomModalDate}T${lockCustomModalTime}:00`);
+    if (Number.isNaN(candidate.getTime())) {
+      setShowLockCustomModal(false);
+      return;
+    }
+    const ms = candidate.getTime();
+    if (ms < actualMinMsForView || ms > maxMsForView) {
+      return;
+    }
+    setLockCustomDateMs(ms);
+    setLockMobileDateChoice(ms.toString());
+    setLockEndDateInput(candidate);
+    setLockEndTimeInput(formatTimeFromDate(candidate));
+    setLockEndTimeDirty(true);
+    setLockDurationDirty(true);
+    setLockMobileDuration('');
+    setShowLockCustomModal(false);
+  };
+
   const handleApproveOnly = async (event: FormEvent) => {
     event.preventDefault();
     if (!walletConnected || !walletAddress) {
@@ -1500,12 +1531,38 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     lockView,
   ]);
 
-  const addDynamicMinMs = useMemo(() => {
-    if (!addWeightedMinDurationSeconds) return null;
-    const candidateMs =
-      Number((BigInt(nowSeconds) + addWeightedMinDurationSeconds) * 1000n);
-    return Math.max(candidateMs, lockEndDateMin.getTime());
-  }, [addWeightedMinDurationSeconds, lockEndDateMin, nowSeconds]);
+  const currentExpiryMs = useMemo(() => {
+    if (!hasExistingLock || !lockDetails?.unlock_timestamp) return null;
+    return lockDetails.unlock_timestamp * 1000;
+  }, [hasExistingLock, lockDetails?.unlock_timestamp]);
+
+  const addWeightedMinMsRaw = useMemo(() => {
+    if (!hasExistingLock || lockView !== 'manage') return null;
+    if (!addWeightedMinDurationSeconds) return currentExpiryMs ?? extendMinMillis;
+    return Number((BigInt(nowSeconds) + addWeightedMinDurationSeconds) * 1000n);
+  }, [
+    addWeightedMinDurationSeconds,
+    currentExpiryMs,
+    extendMinMillis,
+    hasExistingLock,
+    lockView,
+    nowSeconds,
+  ]);
+
+  const addDynamicMinMsBuffered = useMemo(() => {
+    if (!hasExistingLock || lockView !== 'manage') return null;
+    const baseMin = addWeightedMinMsRaw ?? currentExpiryMs ?? extendMinMillis;
+    const buffered = baseMin + TWENTY_FOUR_HOURS_MS;
+    const clampTarget = currentExpiryMs ?? extendMinMillis;
+    // buffered min used for selector/hints (clamp so it never exceeds current expiry)
+    return Math.min(buffered, clampTarget);
+  }, [
+    addWeightedMinMsRaw,
+    currentExpiryMs,
+    extendMinMillis,
+    hasExistingLock,
+    lockView,
+  ]);
 
   const addDynamicMaxMs = useMemo(() => {
     if (!addWeightedMaxDurationSeconds) return null;
@@ -1529,11 +1586,11 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
   }, [maxMsForView]);
 
   const addDisplayMinDateForHint = useMemo(() => {
-    if (lockView === 'manage' && hasExistingLock && addDynamicMinMs !== null) {
-      return roundUpToNextDay(addDynamicMinMs);
+    if (lockView === 'manage' && hasExistingLock && addDynamicMinMsBuffered !== null) {
+      return roundUpToNextDay(addDynamicMinMsBuffered);
     }
     return extendEndDateDisplayMin;
-  }, [addDynamicMinMs, extendEndDateDisplayMin, hasExistingLock, lockView]);
+  }, [addDynamicMinMsBuffered, extendEndDateDisplayMin, hasExistingLock, lockView]);
   const suppressLockHint = useMemo(() => {
     if (lockView === 'extend') {
       return extendEndDateDisplayMin.getTime() >= lockEndDateDisplayMax.getTime();
@@ -1549,15 +1606,13 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
       if (lockView === 'extend') {
         return extendMinMillis;
       }
-      if (lockView === 'manage' && hasExistingLock) {
-        if (addDynamicMinMs !== null) {
-          return addDynamicMinMs;
-        }
-        return extendMinMillis;
-      }
-      return lockEndDateMin.getTime();
-    },
-    [addDynamicMinMs, extendMinMillis, hasExistingLock, lockEndDateMin, lockView],
+    if (lockView === 'manage' && hasExistingLock) {
+      const raw = addWeightedMinMsRaw ?? extendMinMillis;
+      return Math.max(raw, extendMinMillis);
+    }
+    return lockEndDateMin.getTime();
+  },
+    [addWeightedMinMsRaw, extendMinMillis, hasExistingLock, lockEndDateMin, lockView],
   );
   const pickerMinDateForView = useMemo(() => {
     const d = new Date(actualMinMsForView);
@@ -1583,9 +1638,8 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     lockView === 'extend'
       ? extendMinMillis
       : lockView === 'manage' && hasExistingLock
-        ? addDynamicMinMs ?? lockEndDateMin.getTime()
-        : lockEndDateMin.getTime();
-  const twentyFourHoursMs = 24 * 60 * 60 * 1000;
+    ? Math.max(addWeightedMinMsRaw ?? extendMinMillis, extendMinMillis)
+    : lockEndDateMin.getTime();
   const hasValidEndDate =
     lockDurationMode === 'duration'
       ? true
@@ -1593,6 +1647,13 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
         Boolean(lockEndDateInput) &&
         lockEndDateInput!.getTime() >= minEndDateForValidationMs &&
         lockEndDateInput!.getTime() <= lockEndDateDisplayMax.getTime();
+  const lockCustomSetDisabled = useMemo(() => {
+    if (!lockCustomModalDate || !lockCustomModalTime) return true;
+    const candidate = new Date(`${lockCustomModalDate}T${lockCustomModalTime}:00`);
+    if (Number.isNaN(candidate.getTime())) return true;
+    const ms = candidate.getTime();
+    return ms < actualMinMsForView || ms > maxMsForView;
+  }, [actualMinMsForView, lockCustomModalDate, lockCustomModalTime, maxMsForView]);
 
   const lockMobileDurationOptions = useMemo(() => {
     if (isMobile && lockView === 'manage' && hasExistingLock) {
@@ -1615,10 +1676,10 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
         { label: '-3 days', seconds: 3 * SECONDS_PER_DAY },
       ];
       const nowMs = Date.now();
-      const minOptionMs = minEndDateForValidationMs + twentyFourHoursMs;
-      const maxOptionMs = maxMsForView;
+      const minOptionMs = addDynamicMinMsBuffered ?? minEndDateForValidationMs + TWENTY_FOUR_HOURS_MS;
+      const maxOptionMs = currentExpiryMs ?? maxMsForView;
       const candidates: { label: string; seconds: number; value: string }[] = [];
-      // MIN duration entry (actual min + 24h)
+      // MIN duration entry (buffered min)
       const minSeconds = Math.max(0, Math.round((minOptionMs - nowMs) / 1000));
       candidates.push({ label: 'MIN duration', seconds: minSeconds, value: '__min__' });
       deltas.forEach((delta) => {
@@ -1630,10 +1691,8 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
       });
       // NO CHANGE (current lock duration)
       const currentSeconds = Number(baseSeconds);
-      const currentMs = nowMs + currentSeconds * 1000;
-      if (currentMs >= minOptionMs && currentMs <= maxOptionMs) {
-        candidates.push({ label: 'NO CHANGE', seconds: currentSeconds, value: '__current__' });
-      }
+      // Always include NO CHANGE at the exact current expiry; never remove it.
+      candidates.push({ label: 'NO CHANGE', seconds: currentSeconds, value: '__current__' });
       const dedup = new Map<number, { label: string; seconds: number; value: string }>();
       candidates
         .sort((a, b) => a.seconds - b.seconds)
@@ -1716,6 +1775,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     if (!(lockView === 'manage' && hasExistingLock)) return;
     setLockMobileDuration('');
     setLockMobileDateChoice(null);
+    setLockCustomDateMs(null);
     setLockEndDateInput(null);
     setLockEndTimeInput('00:00:00');
     setLockDurationDirty(false);
@@ -1767,21 +1827,60 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
       (amountValue > 0 || (allowZeroAmount && amountValue === 0)) &&
       !exceedsLockAvailable &&
       (!hasExistingLock ||
-        (addDynamicMinMs !== null &&
+        (addDynamicMinMsBuffered !== null &&
           addDynamicMaxMs !== null &&
-          addDynamicMinMs < extendMinMillis - twentyFourHoursMs &&
-          addDynamicMaxMs > extendMinMillis + twentyFourHoursMs));
+          addDynamicMinMsBuffered < extendMinMillis - TWENTY_FOUR_HOURS_MS &&
+          addDynamicMaxMs > extendMinMillis + TWENTY_FOUR_HOURS_MS));
   const waitingForManagePrompt =
     isAllowanceConfirmed && pendingLock && !manageTxHash && !isManagePending && !isManageConfirming;
   const specialDateOptions = useMemo(() => buildSpecialDateOptions(), []);
   const lockFilteredSpecialDates = useMemo(() => {
-    if (!isMobile) return specialDateOptions;
-    if (lockView === 'manage') return [];
-    return specialDateOptions.filter(
+    let base = specialDateOptions;
+    if (lockView === 'manage') {
+      base = [];
+    }
+    let filtered = base.filter(
       (opt) =>
         opt.date.getTime() >= minEndDateForValidationMs && opt.date.getTime() <= maxMsForView,
     );
-  }, [isMobile, lockView, maxMsForView, minEndDateForValidationMs, specialDateOptions]);
+    if (lockView === 'extend') {
+      // Keep the regular options and optionally add a custom entry if range is wide enough
+      const allowCustom = actualMinMsForView + 5 * 60 * 1000 <= maxMsForView;
+      if (allowCustom) {
+        const customEntries =
+          lockCustomDateMs !== null
+            ? [
+              {
+                label: formatShortDateLabel(new Date(lockCustomDateMs)),
+                value: lockCustomDateMs.toString(),
+                date: new Date(lockCustomDateMs),
+                legend: 'custom',
+              },
+            ]
+            : [
+              {
+                label: 'CUSTOM',
+                value: '__custom__',
+                date: new Date(),
+                legend: 'custom',
+              },
+            ];
+        filtered = [...filtered, ...customEntries];
+        if (lockCustomDateMs !== null) {
+          filtered = filtered.filter((opt) => opt.value !== '__custom__');
+        }
+      }
+    }
+    if (!isMobile) return filtered;
+    return filtered;
+  }, [
+    isMobile,
+    lockCustomDateMs,
+    lockView,
+    maxMsForView,
+    minEndDateForValidationMs,
+    specialDateOptions,
+  ]);
   useEffect(() => {
     if (lockFilteredSpecialDates.length === 0) {
       setLockMobileDateChoice(null);
@@ -2016,14 +2115,18 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                       {lockFilteredSpecialDates.length > 0 && <label className="mobile-sub-label">Duration</label>}
                       <select
                         value={lockMobileDuration}
-                        onChange={(event) => {
-                          const nextVal = event.target.value;
-                          setLockMobileDuration(nextVal);
-                          if (nextVal === '') {
-                            setLockEndDateInput(null);
-                            setLockEndTimeInput('00:00:00');
-                            return;
-                          }
+                          onChange={(event) => {
+                            const nextVal = event.target.value;
+                            setLockMobileDuration(nextVal);
+                            if (lockCustomDateMs) {
+                              setLockCustomDateMs(null);
+                              setLockMobileDateChoice('');
+                            }
+                            if (nextVal === '') {
+                              setLockEndDateInput(null);
+                              setLockEndTimeInput('00:00:00');
+                              return;
+                            }
                           setLockMobileDateChoice('');
                           const opt = lockMobileDurationOptions.find((o) => o.value === nextVal);
                           if (opt) {
@@ -2042,11 +2145,29 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                     {lockFilteredSpecialDates.length > 0 && (
                       <div className="input-field mobile-duration-select">
                         <label className="mobile-sub-label">Date</label>
-                        <select
-                          value={lockMobileDateChoice ?? ''}
-                          onChange={(event) => {
+                          <select
+                            value={lockMobileDateChoice ?? ''}
+                            onChange={(event) => {
                             const nextVal = event.target.value;
+                            if (nextVal === '__custom__') {
+                              const baseRaw = lockEndDateInput ?? new Date(defaultEndMsForView);
+                              const plusBuffer = baseRaw.getTime() + 60 * 1000;
+                              const clampedMs = Math.min(
+                                Math.max(plusBuffer, actualMinMsForView),
+                                maxMsForView,
+                              );
+                              const base = new Date(clampedMs);
+                              setLockCustomModalDate(formatDateIso(base));
+                              setLockCustomModalTime(formatTimeFromDate(base).slice(0, 5));
+                              setShowLockCustomModal(true);
+                              setLockMobileDateChoice('__custom__');
+                              setLockMobileDuration('');
+                              return;
+                            }
                             setLockMobileDateChoice(nextVal);
+                            if (lockCustomDateMs && nextVal !== lockCustomDateMs.toString()) {
+                              setLockCustomDateMs(null);
+                            }
                             if (nextVal === '') {
                               setLockEndDateInput(null);
                               setLockEndTimeInput('00:00:00');
@@ -2236,6 +2357,71 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
       )}
 
       {lastError && <div className="inline-error">{lastError}</div>}
+
+      {showLockCustomModal && (
+        <div className="modal-backdrop">
+          <div className="modal-card">
+            <h3>Choose custom expiry</h3>
+              <div className="input-grid">
+                <label className="input-field">
+                  <span>Date</span>
+                  <input
+                    type="date"
+                    min={formatDateIso(new Date(actualMinMsForView))}
+                    max={formatDateIso(new Date(maxMsForView))}
+                    value={lockCustomModalDate}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (!raw) {
+                        setLockCustomModalDate(raw);
+                        return;
+                      }
+                      const timePart = lockCustomModalTime || '00:00';
+                      const candidate = new Date(`${raw}T${timePart}:00`);
+                      if (Number.isNaN(candidate.getTime())) {
+                        return;
+                      }
+                      const clampedMs = Math.min(
+                        Math.max(candidate.getTime(), actualMinMsForView),
+                        maxMsForView,
+                      );
+                      const clamped = new Date(clampedMs);
+                      setLockCustomModalDate(formatDateIso(clamped));
+                    }}
+                  />
+                </label>
+                <label className="input-field">
+                <span>Time</span>
+                <input
+                  type="time"
+                  step="60"
+                  value={lockCustomModalTime}
+                  onChange={(e) => setLockCustomModalTime(e.target.value)}
+                />
+              </label>
+              </div>
+          <div className="modal-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={handleLockCustomSet}
+              disabled={lockCustomSetDisabled}
+            >
+              Set
+            </button>
+            <button type="button" className="secondary-button ghost" onClick={handleLockCustomCancel}>
+              Cancel
+            </button>
+          </div>
+          {lockCustomSetDisabled && (
+            <div className="input-subtext modal-hint">
+              The custom value must be between {formatDateTimeAmPm(actualMinMsForView)} and{' '}
+              {formatDateTimeAmPm(maxMsForView)}.
+            </div>
+          )}
+          </div>
+        </div>
+      )}
     </section>
   );
 };
@@ -2737,6 +2923,12 @@ const BindStep = ({
   }, [isTransferConfirmed, refreshLockStatus, minLockDurationSeconds, transferEndDateMin]);
 
   useEffect(() => {
+    if (transferReceipt) {
+      void refreshLockStatus();
+    }
+  }, [transferReceipt, refreshLockStatus]);
+
+  useEffect(() => {
     if (isTransferConfirmed && transferTxHash) {
       setTransferSuccessHash(transferTxHash);
       setUserSetBindView(false);
@@ -3028,6 +3220,8 @@ const BindStep = ({
                   placeholder="example.name.os"
                   autoCapitalize="none"
                   autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck={false}
                   value={dstNameInput}
                   onChange={(event) => setDstNameInput(event.target.value)}
                 />
@@ -3473,6 +3667,15 @@ const TopStatusBar = () => (
 );
 
 const shortHash = (hash: `0x${string}`) => `${hash.slice(0, 8)}…${hash.slice(-6)}`;
+
+const formatDateTimeAmPm = (ms: number) => {
+  const d = new Date(ms);
+  const pad = (v: number) => v.toString().padStart(2, '0');
+  const hours24 = d.getHours();
+  const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
+  const ampm = hours24 >= 12 ? 'PM' : 'AM';
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(hours12)}:${pad(d.getMinutes())} ${ampm}`;
+};
 
 const formatTimestamp = (seconds: number) => {
   if (!seconds) return '0';
