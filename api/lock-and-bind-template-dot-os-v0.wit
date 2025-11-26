@@ -1,4 +1,0 @@
-world lock-and-bind-template-dot-os-v0 {
-    import app;
-    include process-v1;
-}

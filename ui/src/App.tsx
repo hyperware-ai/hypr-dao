@@ -8,7 +8,7 @@ import { concatHex, keccak256, parseEther, stringToBytes } from 'viem';
 import './App.css';
 import { useBindAndLockStore } from './store/lock_and_bind';
 import type { BalanceView, BindingView, LockDetailsView } from './types/lock_and_bind';
-import { App as CallerApp } from '#caller-utils';
+import { HyprDao as CallerApp } from '#caller-utils';
 
 const simulationMode = import.meta.env.VITE_SIMULATION_MODE === 'true';
 
@@ -707,7 +707,7 @@ function App() {
                 <div className="lock-card">
                   <span className="lock-card-label">Connect required</span>
                   <span className="lock-card-value">
-                    Connect to a wallet to use this application. If you have already connected and are still seeing this message, please manually refresh the page.
+                    Please connect your wallet
                   </span>
                 </div>
               </div>
@@ -1445,7 +1445,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
           <div className="lock-card">
             <span className="lock-card-label">Connect required</span>
             <span className="lock-card-value">
-              Connect to a wallet to use this application. If you have already connected and are still seeing this message, please manually refresh the page.
+              Please connect your wallet
             </span>
           </div>
         </div>

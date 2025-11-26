@@ -18,3 +18,4 @@ pkg/ui
 .env
 /.idea
 ui/dist
+api/*.wit

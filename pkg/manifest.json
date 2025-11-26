@@ -1,7 +1,7 @@
 [
   {
-    "process_name": "lock-and-bind",
-    "process_wasm_path": "/lock-and-bind.wasm",
+    "process_name": "hypr-dao",
+    "process_wasm_path": "/hypr-dao.wasm",
     "on_exit": "Restart",
     "request_networking": false,
     "request_capabilities": [

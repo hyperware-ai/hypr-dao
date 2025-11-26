@@ -91,7 +91,7 @@ struct LockStatusPayload {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct AppState {
+struct HyprDaoState {
     node_id: String,
     owner_address: Option<String>,
     owner_resolution_attempted: bool,
@@ -106,7 +106,7 @@ struct AppState {
     lock_modal_seen: bool,
 }
 
-impl Default for AppState {
+impl Default for HyprDaoState {
     fn default() -> Self {
         Self {
             node_id: String::new(),
@@ -126,19 +126,19 @@ impl Default for AppState {
 }
 
 #[hyperprocess(
-    name = "Lock & Bind",
+    name = "HYPR DAO",
     ui = Some(hyperware_process_lib::http::server::HttpBindingConfig::default()),
     endpoints = vec![hyperware_process_lib::hyperapp::Binding::Http {
         path: "/api",
-        config: hyperware_process_lib::http::server::HttpBindingConfig::new(false, false, false, None),
+        config: hyperware_process_lib::http::server::HttpBindingConfig::default(),
     }],
     save_config = hyperware_process_lib::hyperapp::SaveOptions::EveryMessage,
-    wit_world = "lock-and-bind-template-dot-os-v0"
+    wit_world = "hypr-dao-ware-dot-hypr-v0"
 )]
-impl AppState {
+impl HyprDaoState {
     #[init]
     async fn initialize(&mut self) {
-        add_to_homepage("Lock & Bind", Some(ICON), Some("/"), None);
+        add_to_homepage("HYPR DAO", Some(ICON), Some("/"), None);
         self.node_id = our().node.clone();
         if let Err(err) = self.refresh_lock_state() {
             println!("Failed to load lock details: {}", err);
@@ -177,7 +177,7 @@ impl AppState {
     }
 }
 
-impl AppState {
+impl HyprDaoState {
     fn current_status(&self) -> LockStatusPayload {
         LockStatusPayload {
             node_id: self.node_id.clone(),
