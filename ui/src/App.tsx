@@ -14,7 +14,7 @@ const simulationMode = import.meta.env.VITE_SIMULATION_MODE === 'true';
 
 type StepId = 'lock' | 'bind';
 type StepIcon = 'check' | 'lock' | 'chain';
-type LockView = 'details' | 'manage' | 'extend';
+type LockView = 'details' | 'manage' | 'extend' | 'approve';
 
 interface StepConfig {
   id: StepId;
@@ -124,9 +124,14 @@ const MOBILE_DURATION_OPTIONS: { label: string; seconds: number; value: string }
   { label: '3 days', seconds: 3 * SECONDS_PER_DAY, value: '3d' },
   { label: '1 week', seconds: 1 * SECONDS_PER_WEEK, value: '1w' },
   { label: '2 weeks', seconds: 2 * SECONDS_PER_WEEK, value: '2w' },
+  { label: '3 weeks', seconds: 3 * SECONDS_PER_WEEK, value: '3w' },
+  { label: '4 weeks', seconds: 4 * SECONDS_PER_WEEK, value: '4w' },
   { label: '1 month', seconds: 1 * SECONDS_PER_MONTH, value: '1mo' },
+  { label: '2 months', seconds: 2 * SECONDS_PER_MONTH, value: '2mo' },
   { label: '3 months', seconds: 3 * SECONDS_PER_MONTH, value: '3mo' },
+  { label: '4 months', seconds: 4 * SECONDS_PER_MONTH, value: '4mo' },
   { label: '6 months', seconds: 6 * SECONDS_PER_MONTH, value: '6mo' },
+  { label: '9 months', seconds: 9 * SECONDS_PER_MONTH, value: '9mo' },
   { label: '1 year', seconds: 1 * SECONDS_PER_YEAR, value: '1y' },
   { label: '2 years', seconds: 2 * SECONDS_PER_YEAR, value: '2y' },
   { label: '3 years', seconds: 3 * SECONDS_PER_YEAR, value: '3y' },
@@ -170,10 +175,6 @@ const buildSpecialDateOptions = () => {
     const month = d.getMonth();
     let candidate = new Date(year, month + 1, 0);
     candidate.setHours(23, 55, 0, 0);
-    if (candidate.getTime() <= start.getTime()) {
-      candidate = new Date(year, month + 2, 0);
-      candidate.setHours(23, 55, 0, 0);
-    }
     return candidate;
   };
 
@@ -215,25 +216,27 @@ const buildSpecialDateOptions = () => {
   const firstFriday = nextWeekday(5, todayMidnight);
   const secondFriday = new Date(firstFriday);
   secondFriday.setDate(firstFriday.getDate() + 7);
-  candidates.push({ date: firstFriday, legend: 'this Friday' });
-  candidates.push({ date: secondFriday, legend: 'next Friday' });
+  candidates.push({ date: firstFriday, legend: 'upcoming Friday' });
+  candidates.push({ date: secondFriday, legend: 'Friday of upcoming week' });
 
   const endMonth = endOfMonthAfter(todayMidnight);
+  const endNextMonth = endOfMonthAfter(new Date(endMonth.getFullYear(), endMonth.getMonth() + 1, 1));
   candidates.push({ date: endMonth, legend: 'end of this month' });
+  candidates.push({ date: endNextMonth, legend: 'end of next month' });
 
   const firstQuarterEnd = endOfQuarterAfter(todayMidnight);
   const nextQuarterStart = new Date(firstQuarterEnd);
   nextQuarterStart.setDate(nextQuarterStart.getDate() + 1);
   const secondQuarterEnd = endOfQuarterAfter(nextQuarterStart);
   candidates.push({ date: firstQuarterEnd, legend: 'end of this quarter' });
-  candidates.push({ date: secondQuarterEnd, legend: 'end of the next quarter' });
+  candidates.push({ date: secondQuarterEnd, legend: 'end of next quarter' });
 
   const yearEnd1 = endOfYearAfter(todayMidnight, 0);
   const yearEnd2 = endOfYearAfter(todayMidnight, 1);
   const yearEnd3 = endOfYearAfter(todayMidnight, 2);
   candidates.push({ date: yearEnd1, legend: 'end of this year' });
   candidates.push({ date: yearEnd2, legend: 'end of next year' });
-  candidates.push({ date: yearEnd3, legend: 'end of the year after next' });
+  candidates.push({ date: yearEnd3, legend: 'end of year after next' });
 
   const deduped = new Map<number, SpecialCandidate>();
   candidates.forEach((candidate) => {
@@ -395,8 +398,6 @@ const calculateRequiredAdditionalDuration = (
 
 function App() {
   const [activeStep, setActiveStep] = useState<StepId>('lock');
-  const [showLockModal, setShowLockModal] = useState(false);
-  const [lockModalResume, setLockModalResume] = useState<(() => void) | null>(null);
   const [lockUpdateNonce, setLockUpdateNonce] = useState(0);
   const handleLockUpdated = useCallback(() => {
     setLockUpdateNonce((prev) => prev + 1);
@@ -412,7 +413,6 @@ function App() {
     availableToBind,
     bindings,
     hyprTokenAddress,
-    lockModalSeen,
     lastError,
     isLoading,
     error,
@@ -420,7 +420,6 @@ function App() {
     fetchLockStatus,
     refreshLockStatus,
     clearError,
-    acknowledgeLockModal,
     minLockDurationSeconds: minLockDurationSecondsRaw,
   } = useBindAndLockStore();
   const minLockDurationReady = minLockDurationSecondsRaw !== null;
@@ -434,14 +433,6 @@ function App() {
   const { reconnect } = useReconnect();
   const reconnectIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectAttemptsRef = useRef(0);
-  const showLockInfoModal = (resume?: () => void) => {
-    setLockModalResume(() => (resume ? () => resume() : null));
-    setShowLockModal(true);
-  };
-  const dismissLockInfoModal = () => {
-    setShowLockModal(false);
-    setLockModalResume(null);
-  };
   const targetRegistryAddress = useMemo(() => {
     if (chain?.id && TOKEN_REGISTRY_ADDRESSES[chain.id]) {
       return TOKEN_REGISTRY_ADDRESSES[chain.id];
@@ -682,7 +673,7 @@ function App() {
                           lockDetails={lockDetails}
                           hyprOwned={hyprOwned}
                           hyprApproved={hyprApproved}
-                          tokeregistryAllowance={tokeregistryAllowance}
+                          lockAllowance={tokeregistryAllowance}
                           availableToBind={availableToBind}
                           hyprTokenAddress={hyprTokenAddress}
                           lastError={lastError}
@@ -691,8 +682,6 @@ function App() {
                           walletConnected={walletConnected}
                           walletAddress={address}
                           targetRegistryAddress={targetRegistryAddress}
-                          hasSeenLockModal={lockModalSeen}
-                          onRequireLockInfo={(resume) => showLockInfoModal(resume)}
                           minLockDurationSeconds={minLockDurationSeconds}
                           onLockUpdated={handleLockUpdated}
                           isMobile={isMobile}
@@ -741,45 +730,6 @@ function App() {
           />
         </div>
       </div>
-      {showLockModal && (
-        <div className="modal-backdrop">
-          <div className="modal-card">
-            <h3>How locking works</h3>
-            <p>Locking HYPR can involve two blockchain transactions:</p>
-            <ol>
-              <li><strong>Approve HYPR:</strong> Authorizes the TokenRegistry to use the amount you specify.</li>
-              <li><strong>Lock HYPR:</strong> Moves the approved HYPR into the Registry contract for the duration you choose (between 4 weeks and 4 years).</li>
-            </ol>
-            <p>
-              <strong> After these transactions, the HYPR will be kept under the control of the Registry contract for the duration of the lock.</strong>&nbsp;
-              Double-check your amount and duration before confirming the transactions.
-            </p>
-            <div className="modal-actions">
-              <button
-                className="secondary-button ghost centered"
-                onClick={() => {
-                  dismissLockInfoModal();
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                className="secondary-button"
-                onClick={async () => {
-                  await acknowledgeLockModal();
-                  const resume = lockModalResume;
-                  dismissLockInfoModal();
-                  if (resume) {
-                    resume();
-                  }
-                }}
-              >
-                Accept and continue transactions
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -791,7 +741,7 @@ interface LockStepProps {
   lockDetails: LockDetailsView | null;
   hyprOwned: BalanceView | null;
   hyprApproved: BalanceView | null;
-  tokeregistryAllowance: BalanceView | null;
+  lockAllowance: BalanceView | null;
   availableToBind: BalanceView | null;
   hyprTokenAddress: string | null;
   lastError: string | null;
@@ -800,8 +750,6 @@ interface LockStepProps {
   walletConnected: boolean;
   walletAddress?: `0x${string}`;
   targetRegistryAddress: `0x${string}`;
-  hasSeenLockModal: boolean;
-  onRequireLockInfo: (resume: () => void) => void;
   minLockDurationSeconds: number;
   onLockUpdated: () => void;
   isMobile: boolean;
@@ -814,7 +762,7 @@ const LockStep = ({
   lockDetails,
   hyprOwned,
   hyprApproved,
-  tokeregistryAllowance,
+  lockAllowance,
   availableToBind,
   hyprTokenAddress,
   lastError,
@@ -823,8 +771,6 @@ const LockStep = ({
   walletConnected,
   walletAddress,
   targetRegistryAddress,
-  hasSeenLockModal,
-  onRequireLockInfo,
   minLockDurationSeconds,
   onLockUpdated,
   isMobile,
@@ -863,6 +809,7 @@ const LockStep = ({
   const lockedAmountWei = lockDetails?.amount_raw_wei ? BigInt(lockDetails.amount_raw_wei) : 0n;
   const hasExistingLock = lockedAmountWei > 0n;
   const hyprOwnedWei = hyprOwned?.amount_raw_wei ? BigInt(hyprOwned.amount_raw_wei) : 0n;
+  const lockAvailableWei = lockAllowance?.amount_raw_wei ? BigInt(lockAllowance.amount_raw_wei) : 0n;
   const lockExpired = hasExistingLock && (lockDetails?.remaining_seconds ?? 0) === 0;
   useEffect(() => {
     // when lock existence changes (e.g., after refresh), allow default routing again
@@ -872,10 +819,13 @@ const LockStep = ({
     if (userSetLockView) return;
     if (hasExistingLock && lockView !== 'details') {
       setLockView('details');
-    } else if (!hasExistingLock && lockView !== 'manage') {
-      setLockView('manage');
+    } else if (!hasExistingLock) {
+      const targetView = lockAvailableWei === 0n ? 'approve' : 'manage';
+      if (lockView !== targetView) {
+        setLockView(targetView);
+      }
     }
-  }, [hasExistingLock, lockView, userSetLockView]);
+  }, [hasExistingLock, lockAvailableWei, lockView, userSetLockView]);
 
   useEffect(() => {
     if (lockExpired && lockView !== 'details') {
@@ -913,7 +863,7 @@ const LockStep = ({
     () => durationPartsToSeconds(durationParts),
     [durationParts],
   );
-  const hasAllowance = tokeregistryAllowance && tokeregistryAllowance.amount_raw_wei !== '0';
+  const hasAllowance = lockAllowance && lockAllowance.amount_raw_wei !== '0';
   const minDurationSecondsBigInt = BigInt(minLockDurationSeconds);
   const lockEndDateMin = useMemo(
     () => new Date((nowSeconds + minLockDurationSeconds) * 1000),
@@ -1332,8 +1282,8 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     }
 
     const amountWei = additionalAmountWei;
-  const allowanceWei = tokeregistryAllowance ? BigInt(tokeregistryAllowance.amount_raw_wei) : 0n;
-  const needsAllowanceTopUp = amountWei > allowanceWei;
+    const allowanceWei = lockAllowance ? BigInt(lockAllowance.amount_raw_wei) : 0n;
+    const needsAllowanceTopUp = amountWei > allowanceWei;
     let submittedDurationSeconds = selectedLockDurationSeconds;
     if (hasExistingLock && amountWei > 0n) {
       const requiredDuration = calculateRequiredAdditionalDuration(
@@ -1400,14 +1350,61 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
   const handleManageLock = async (event: FormEvent) => {
     event.preventDefault();
 
-    if (!hasSeenLockModal) {
-      onRequireLockInfo(() => {
-        void submitLockRequest();
-      });
+    await submitLockRequest();
+  };
+
+  const handleApproveOnly = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!walletConnected || !walletAddress) {
+      pushManageError('Connect a wallet to approve.');
       return;
     }
-
-    await submitLockRequest();
+    if (!hyprTokenAddress) {
+      pushManageError('Unable to resolve HYPR token address.');
+      return;
+    }
+    if (!amountInput) {
+      pushManageError('Enter a HYPR amount.');
+      return;
+    }
+    const disallowZero = lockAvailableWei === 0n;
+    if (Number(amountInput) < 0 || (disallowZero && Number(amountInput) === 0)) {
+      pushManageError(disallowZero ? 'Enter a positive HYPR amount.' : 'Enter a non-negative HYPR amount.');
+      return;
+    }
+    const amountWei = (() => {
+      try {
+        return parseEther(amountInput);
+      } catch {
+        return 0n;
+      }
+    })();
+    if (amountWei < 0n || (disallowZero && amountWei === 0n)) {
+      pushManageError(disallowZero ? 'Enter a positive HYPR amount.' : 'Enter a valid HYPR amount.');
+      return;
+    }
+    if (amountWei > hyprOwnedWei) {
+      pushManageError('Amount exceeds HYPR available to approve.');
+      return;
+    }
+    try {
+      await writeApproveContract({
+        address: hyprTokenAddress as `0x${string}`,
+        abi: erc20ApproveAbi,
+        functionName: 'approve',
+        args: [targetRegistryAddress, amountWei],
+      });
+      if (hasExistingLock) {
+        setLockView('details');
+      } else if (amountWei > 0n) {
+        setAmountInput('');
+        setLockView('manage');
+      } else {
+        setLockView('approve');
+      }
+    } catch (err) {
+      pushManageError(getErrorMessage(err));
+    }
   };
 
   if (!connectComplete) {
@@ -1495,17 +1492,12 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
 
   const addWeightedMaxDurationSeconds = useMemo(() => {
     if (!hasExistingLock || lockView !== 'manage') return null;
-    const target = BigInt(MAX_LOCK_DURATION_SECONDS);
-    const weighted = weightedDurationSeconds(existingAmountWei, existingDurationSeconds, additionalAmountWei, target);
-    if (!weighted) return null;
-    return weighted > target ? target : weighted;
+    // For Add view, cap at the current lock duration (do not extend beyond existing expiry)
+    return existingDurationSeconds > 0n ? existingDurationSeconds : null;
   }, [
-    additionalAmountWei,
-    existingAmountWei,
     existingDurationSeconds,
     hasExistingLock,
     lockView,
-    weightedDurationSeconds,
   ]);
 
   const addDynamicMinMs = useMemo(() => {
@@ -1593,6 +1585,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
       : lockView === 'manage' && hasExistingLock
         ? addDynamicMinMs ?? lockEndDateMin.getTime()
         : lockEndDateMin.getTime();
+  const twentyFourHoursMs = 24 * 60 * 60 * 1000;
   const hasValidEndDate =
     lockDurationMode === 'duration'
       ? true
@@ -1602,6 +1595,55 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
         lockEndDateInput!.getTime() <= lockEndDateDisplayMax.getTime();
 
   const lockMobileDurationOptions = useMemo(() => {
+    if (isMobile && lockView === 'manage' && hasExistingLock) {
+      const baseSeconds = existingDurationSeconds;
+      if (baseSeconds <= 0n) return [];
+      const deltas: { label: string; seconds: number }[] = [
+        { label: '-3 years', seconds: 3 * SECONDS_PER_YEAR },
+        { label: '-2 years', seconds: 2 * SECONDS_PER_YEAR },
+        { label: '-1 year', seconds: 1 * SECONDS_PER_YEAR },
+        { label: '-9 months', seconds: 9 * SECONDS_PER_MONTH },
+        { label: '-6 months', seconds: 6 * SECONDS_PER_MONTH },
+        { label: '-4 months', seconds: 4 * SECONDS_PER_MONTH },
+        { label: '-3 months', seconds: 3 * SECONDS_PER_MONTH },
+        { label: '-2 months', seconds: 2 * SECONDS_PER_MONTH },
+        { label: '-1 month', seconds: 1 * SECONDS_PER_MONTH },
+        { label: '-4 weeks', seconds: 4 * SECONDS_PER_WEEK },
+        { label: '-3 weeks', seconds: 3 * SECONDS_PER_WEEK },
+        { label: '-2 weeks', seconds: 2 * SECONDS_PER_WEEK },
+        { label: '-1 week', seconds: 1 * SECONDS_PER_WEEK },
+        { label: '-3 days', seconds: 3 * SECONDS_PER_DAY },
+      ];
+      const nowMs = Date.now();
+      const minOptionMs = minEndDateForValidationMs + twentyFourHoursMs;
+      const maxOptionMs = maxMsForView;
+      const candidates: { label: string; seconds: number; value: string }[] = [];
+      // MIN duration entry (actual min + 24h)
+      const minSeconds = Math.max(0, Math.round((minOptionMs - nowMs) / 1000));
+      candidates.push({ label: 'MIN duration', seconds: minSeconds, value: '__min__' });
+      deltas.forEach((delta) => {
+        const candidateSeconds = Number(baseSeconds > BigInt(delta.seconds) ? baseSeconds - BigInt(delta.seconds) : 0n);
+        const expiryMs = nowMs + candidateSeconds * 1000;
+        if (expiryMs >= minOptionMs && expiryMs <= maxOptionMs) {
+          candidates.push({ label: delta.label, seconds: candidateSeconds, value: delta.label });
+        }
+      });
+      // NO CHANGE (current lock duration)
+      const currentSeconds = Number(baseSeconds);
+      const currentMs = nowMs + currentSeconds * 1000;
+      if (currentMs >= minOptionMs && currentMs <= maxOptionMs) {
+        candidates.push({ label: 'NO CHANGE', seconds: currentSeconds, value: '__current__' });
+      }
+      const dedup = new Map<number, { label: string; seconds: number; value: string }>();
+      candidates
+        .sort((a, b) => a.seconds - b.seconds)
+        .forEach((opt) => {
+          if (!dedup.has(opt.seconds)) {
+            dedup.set(opt.seconds, opt);
+          }
+        });
+      return Array.from(dedup.values());
+    }
     if (!isMobile) return MOBILE_DURATION_OPTIONS;
     const nowMs = Date.now();
     const minSeconds = Math.max(0, Math.round((minEndDateForValidationMs - nowMs) / 1000));
@@ -1698,8 +1740,8 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     }
   }, [defaultEndMsForView, isMobile, lockDurationDirty, lockEndDateInput, lockEndTimeDirty]);
 
-  const maxAmountLabel = hyprOwned?.amount_formatted_hypr ?? 'Loading…';
-  const maxAmountWei = hyprOwned?.amount_raw_wei ? BigInt(hyprOwned.amount_raw_wei) : 0n;
+  const maxAmountLabel = lockAllowance?.amount_formatted_hypr ?? 'Loading…';
+  const maxAmountWei = lockAllowance?.amount_raw_wei ? BigInt(lockAllowance.amount_raw_wei) : 0n;
   const exceedsLockAvailable = additionalAmountWei > maxAmountWei;
   const lockButtonDisabled =
     !walletConnected ||
@@ -1712,7 +1754,13 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     exceedsLockAvailable ||
     !hasValidEndDate ||
     durationLessThanExisting;
-  const twentyFourHoursMs = 24 * 60 * 60 * 1000;
+  const approveButtonDisabled =
+    !walletConnected ||
+    isAllowancePending ||
+    isAllowanceConfirming ||
+    !amountProvided ||
+    (lockAvailableWei === 0n ? Number(amountInput) <= 0 : Number(amountInput) < 0) ||
+    additionalAmountWei > hyprOwnedWei;
   const showLockFormContent = isMobile
     ? amountProvided && amountValue > 0 && !exceedsLockAvailable
     : amountProvided &&
@@ -1728,11 +1776,12 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
   const specialDateOptions = useMemo(() => buildSpecialDateOptions(), []);
   const lockFilteredSpecialDates = useMemo(() => {
     if (!isMobile) return specialDateOptions;
+    if (lockView === 'manage') return [];
     return specialDateOptions.filter(
       (opt) =>
         opt.date.getTime() >= minEndDateForValidationMs && opt.date.getTime() <= maxMsForView,
     );
-  }, [isMobile, maxMsForView, minEndDateForValidationMs, specialDateOptions]);
+  }, [isMobile, lockView, maxMsForView, minEndDateForValidationMs, specialDateOptions]);
   useEffect(() => {
     if (lockFilteredSpecialDates.length === 0) {
       setLockMobileDateChoice(null);
@@ -1776,6 +1825,13 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     }
   }, [hasExistingLock, lockExpired, resetLockEndDefaults]);
 
+  const handleShowApprovePanel = useCallback(() => {
+    setUserSetLockView(true);
+    setAmountInput('');
+    setLockView('approve');
+    resetLockEndDefaults();
+  }, [resetLockEndDefaults]);
+
   const handleShowDetailsPanel = useCallback(() => {
     if (hasExistingLock) {
       setUserSetLockView(true);
@@ -1785,20 +1841,19 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
 
   return (
     <section className="step-card lock-step">
-      {lockView === 'details' && hasAllowance && tokeregistryAllowance && (
+      {lockView === 'details' && hasAllowance && lockAllowance && (
         <div className="lock-grid">
-          <div className="warning-card">
-            <LockMetric
-              label="Previously allowed"
-              value={tokeregistryAllowance.amount_formatted_hypr}
-            />
+          <div className="lock-card">
+            <div className="lock-card-label">Approved HYPR pending locking</div>
+            <div className="lock-card-value">{lockAllowance.amount_formatted_hypr}</div>
             <button
               type="button"
-              className="warning-button"
+              className="secondary-button"
               disabled={isAllowancePending || isAllowanceConfirming}
               onClick={handleResetApproval}
+              style={{ marginTop: '0.5rem', width: 'fit-content' }}
             >
-              {isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Reset approval'}
+              {isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Revoke approval'}
             </button>
           </div>
         </div>
@@ -1839,13 +1894,28 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
               </div>
               <div className="lock-detail-actions">
                 {!lockExpired && (
-                  <button type="button" className="secondary-button" onClick={handleShowExtendPanel}>
+                  <button type="button" className="secondary-button" style={{ width: 'fit-content' }} onClick={handleShowExtendPanel}>
                     Extend lock
                   </button>
                 )}
-                {!lockExpired && hyprOwnedWei > 0n && (
-                  <button type="button" className="secondary-button ghost" onClick={handleShowManagePanel}>
-                    Add HYPR
+                {!lockExpired && lockAvailableWei > 0n && (
+                  <button
+                    type="button"
+                    className="secondary-button ghost"
+                    style={{ marginTop: '0.5rem', width: 'fit-content' }}
+                    onClick={handleShowManagePanel}
+                  >
+                    Add HYPR to lock
+                  </button>
+                )}
+                {!lockExpired && lockAvailableWei === 0n && (
+                  <button
+                    type="button"
+                    className="secondary-button ghost"
+                    style={{ marginTop: '0.5rem', width: 'fit-content' }}
+                    onClick={handleShowApprovePanel}
+                  >
+                    Approve HYPR to add to lock
                   </button>
                 )}
                 {txNotice && (
@@ -1885,9 +1955,31 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
           <div className="input-grid">
             <label className="input-field">
               <span>
-                {hasExistingLock
-                  ? `Amount to add (up to ${maxAmountLabel})`
-                  : `Amount (up to ${maxAmountLabel})`}
+                {hasExistingLock ? (
+                  hyprOwnedWei > lockAvailableWei ? (
+                    <>
+                      Amount to add (up to {maxAmountLabel} -- click{' '}
+                      <button type="button" className="link-button" onClick={handleShowApprovePanel}>
+                        here
+                      </button>{' '}
+                      to approve a higher limit)
+                    </>
+                  ) : (
+                    `Amount to add (up to ${maxAmountLabel})`
+                  )
+                ) : (
+                  <>
+                    Amount (up to {maxAmountLabel} -- click{' '}
+                    <button type="button" className="link-button" onClick={handleShowApprovePanel}>
+                      here
+                    </button>{' '}
+                    to{' '}
+                    {hyprOwnedWei > lockAvailableWei
+                      ? 'approve a higher limit'
+                      : 'approve a different limit'}
+                    )
+                  </>
+                )}
               </span>
               <input
                 type="number"
@@ -2094,24 +2186,61 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
         </form>
       )}
 
+      {lockView === 'approve' && (
+        <form className="lock-form" onSubmit={handleApproveOnly}>
+          <div className="form-header">
+            <div className="form-header-text">
+              <h3>Approve HYPR for locking</h3>
+            </div>
+          </div>
+
+          <div className="input-grid">
+            <label className="input-field">
+              <span>
+                {lockAvailableWei > 0n
+                  ? `New approval limit ${hyprOwned ? `(up to ${hyprOwned.amount_formatted_hypr})` : '(HYPR)'}`
+                  : `Amount to approve ${hyprOwned ? `(up to ${hyprOwned.amount_formatted_hypr})` : '(HYPR)'}`}
+              </span>
+              <input
+                type="number"
+                min="0"
+                step="0.000000000000000001"
+                value={amountInput}
+                onChange={(event) => setAmountInput(event.target.value)}
+                required
+              />
+            </label>
+          </div>
+
+          <div className="form-actions">
+            <button type="submit" className="secondary-button" disabled={approveButtonDisabled}>
+              {isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Submit Approval'}
+            </button>
+            {hasExistingLock && (
+              <button type="button" className="secondary-button ghost" onClick={handleShowDetailsPanel}>
+                Cancel
+              </button>
+            )}
+          </div>
+          {manageError && (
+            <div className="inline-error" ref={manageErrorRef}>
+              {manageError.text}
+            </div>
+          )}
+          {manageSuccessHash && (
+            <div className="inline-success" ref={manageSuccessRef}>
+              Lock updated! Tx {shortHash(manageSuccessHash)}
+            </div>
+          )}
+        </form>
+      )}
+
       {lastError && <div className="inline-error">{lastError}</div>}
     </section>
   );
 };
 
-interface LockMetricProps {
-  label: string;
-  value: string;
-  subValue?: string;
-}
 
-const LockMetric = ({ label, value, subValue }: LockMetricProps) => (
-  <div className="lock-card">
-    <span className="lock-card-label">{label}</span>
-    <span className="lock-card-value">{value}</span>
-    {subValue && <span className="lock-card-sub">{subValue}</span>}
-  </div>
-);
 
 interface BindStepProps {
   connectComplete: boolean;
@@ -2320,7 +2449,7 @@ const BindStep = ({
     const withBounds: { label: string; seconds: number; value: string }[] = [
       { label: 'MIN duration', seconds: minSeconds, value: '__min__' },
       ...inRange,
-      { label: 'MAX duration', seconds: maxSeconds, value: '__max__' },
+      { label: 'Lock duration', seconds: maxSeconds, value: '__max__' },
     ];
     return withBounds;
   }, [effectiveTransferEndDateMaxMs, effectiveTransferEndDateMinMs, isMobile]);

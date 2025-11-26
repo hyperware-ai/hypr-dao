@@ -250,12 +250,9 @@
 
 .lock-detail-actions {
   display: flex;
+  flex-direction: column;
   gap: 0.5rem;
-  flex-wrap: wrap;
   margin-top: 0.5rem;
-}
-.lock-detail-actions > * + * {
-  margin-left: 0.5rem;
 }
 
 .lock-card-divider {
