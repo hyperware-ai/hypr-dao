@@ -17,21 +17,21 @@ use standard.{address};
         min-lock-duration-seconds: u64
     }
 
-    record bind-details-view {
-        namehash: string,
-        name: option<string>,
-        amount-raw-wei: string,
-        amount-formatted-hypr: string,
-        unlock-timestamp: u64,
-        remaining-seconds: u64
-    }
-
     record balance-view {
         amount-raw-wei: string,
         amount-formatted-hypr: string
     }
 
     record lock-details-view {
+        amount-raw-wei: string,
+        amount-formatted-hypr: string,
+        unlock-timestamp: u64,
+        remaining-seconds: u64
+    }
+
+    record bind-details-view {
+        namehash: string,
+        name: option<string>,
         amount-raw-wei: string,
         amount-formatted-hypr: string,
         unlock-timestamp: u64,

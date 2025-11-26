@@ -2,13 +2,15 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 're
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
-import { useAccount, useWaitForTransactionReceipt, useWriteContract } from 'wagmi';
+import { useAccount, useReconnect, useWaitForTransactionReceipt, useWriteContract } from 'wagmi';
 import { base, anvil } from 'wagmi/chains';
 import { concatHex, keccak256, parseEther, stringToBytes } from 'viem';
 import './App.css';
 import { useBindAndLockStore } from './store/lock_and_bind';
 import type { BalanceView, BindingView, LockDetailsView } from './types/lock_and_bind';
 import { App as CallerApp } from '#caller-utils';
+
+const simulationMode = import.meta.env.VITE_SIMULATION_MODE === 'true';
 
 type StepId = 'lock' | 'bind';
 type StepIcon = 'check' | 'lock' | 'chain';
@@ -429,6 +431,9 @@ function App() {
     BigInt(lockDetails.amount_raw_wei ?? '0') > 0n &&
     (lockDetails.remaining_seconds ?? 0) === 0;
   const { address, chain, isConnected: isWalletConnected } = useAccount();
+  const { reconnect } = useReconnect();
+  const reconnectIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const reconnectAttemptsRef = useRef(0);
   const showLockInfoModal = (resume?: () => void) => {
     setLockModalResume(() => (resume ? () => resume() : null));
     setShowLockModal(true);
@@ -447,6 +452,73 @@ function App() {
   useEffect(() => {
     initialize();
   }, [initialize]);
+
+  useEffect(() => {
+    const reconnectOnResume = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!isWalletConnected) {
+        void reconnect();
+      }
+    };
+    window.addEventListener('focus', reconnectOnResume);
+    document.addEventListener('visibilitychange', reconnectOnResume);
+    return () => {
+      window.removeEventListener('focus', reconnectOnResume);
+      document.removeEventListener('visibilitychange', reconnectOnResume);
+    };
+  }, [isWalletConnected, reconnect]);
+
+  useEffect(() => {
+    if (isWalletConnected) {
+      if (reconnectIntervalRef.current) {
+        clearInterval(reconnectIntervalRef.current);
+        reconnectIntervalRef.current = null;
+      }
+      reconnectAttemptsRef.current = 0;
+      return;
+    }
+    if (reconnectIntervalRef.current) return;
+    reconnectIntervalRef.current = setInterval(() => {
+      if (isWalletConnected) {
+        if (reconnectIntervalRef.current) {
+          clearInterval(reconnectIntervalRef.current);
+          reconnectIntervalRef.current = null;
+        }
+        reconnectAttemptsRef.current = 0;
+        return;
+      }
+      reconnectAttemptsRef.current += 1;
+      if (reconnectAttemptsRef.current > 5) {
+        if (reconnectIntervalRef.current) {
+          clearInterval(reconnectIntervalRef.current);
+          reconnectIntervalRef.current = null;
+        }
+        reconnectAttemptsRef.current = 0;
+        return;
+      }
+      void reconnect();
+    }, 1500);
+    return () => {
+      if (reconnectIntervalRef.current) {
+        clearInterval(reconnectIntervalRef.current);
+        reconnectIntervalRef.current = null;
+      }
+    };
+  }, [isWalletConnected, reconnect]);
+
+  useEffect(() => {
+    const refreshOnResume = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshLockStatus();
+      }
+    };
+    window.addEventListener('focus', refreshOnResume);
+    document.addEventListener('visibilitychange', refreshOnResume);
+    return () => {
+      window.removeEventListener('focus', refreshOnResume);
+      document.removeEventListener('visibilitychange', refreshOnResume);
+    };
+  }, [refreshLockStatus]);
 
   const walletConnected = Boolean(isWalletConnected && address);
   const normalizedOwnerAddress = ownerAddress?.toLowerCase() ?? null;
@@ -648,7 +720,16 @@ function App() {
               </>
             )}
 
-            {!showContent && <div className="body-placeholder" />}
+            {!showContent && (
+              <div className="body-placeholder">
+                <div className="lock-card">
+                  <span className="lock-card-label">Connect required</span>
+                  <span className="lock-card-value">
+                    Connect to a wallet to use this application. If you have already connected and are still seeing this message, please manually refresh the page.
+                  </span>
+                </div>
+              </div>
+            )}
 
           </div>
 
@@ -773,6 +854,7 @@ const LockStep = ({
   const [pendingLock, setPendingLock] = useState<{ amount: bigint; duration: bigint } | null>(null);
   const allowanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const manageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const manageRetryRef = useRef(false);
   const nowSecondsRef = useRef(Math.floor(Date.now() / 1000));
   const nowSeconds = nowSecondsRef.current;
   const [userSetLockView, setUserSetLockView] = useState(false);
@@ -794,6 +876,7 @@ const LockStep = ({
       setLockView('manage');
     }
   }, [hasExistingLock, lockView, userSetLockView]);
+
   useEffect(() => {
     if (lockExpired && lockView !== 'details') {
       setUserSetLockView(false);
@@ -981,6 +1064,7 @@ const LockStep = ({
       pushManageError(msg);
       pushTxNotice(msg, 'error');
       setLockView('details');
+      manageRetryRef.current = false;
     }
   }, [manageWriteError, pushManageError, pushTxNotice]);
 
@@ -996,6 +1080,7 @@ const LockStep = ({
       pushManageError(msg);
       pushTxNotice(msg, 'error');
       setLockView('details');
+      manageRetryRef.current = false;
     }
   }, [isManageReceiptError, manageReceiptError, pushManageError, pushTxNotice]);
 
@@ -1012,16 +1097,6 @@ const LockStep = ({
       return () => clearTimeout(timeout);
     }
   }, [txNotice]);
-
-  useEffect(() => {
-    if (manageError && manageErrorRef.current) {
-      const rect = manageErrorRef.current.getBoundingClientRect();
-      const fullyInView = rect.top >= 0 && rect.bottom <= window.innerHeight;
-      if (!fullyInView) {
-        manageErrorRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    }
-  }, [manageError]);
 
   useEffect(() => {
     if (isManageConfirmed) {
@@ -1066,20 +1141,16 @@ const LockStep = ({
   }, [manageSuccessHash]);
 
   useEffect(() => {
-    if (manageSuccessHash && manageSuccessRef.current) {
-      const rect = manageSuccessRef.current.getBoundingClientRect();
-      const fullyInView = rect.top >= 0 && rect.bottom <= window.innerHeight;
-      if (!fullyInView) {
-        manageSuccessRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    }
-  }, [manageSuccessHash]);
-
-  useEffect(() => {
     if (isAllowanceConfirmed && pendingLock) {
       void triggerLock(pendingLock);
     }
   }, [isAllowanceConfirmed, pendingLock]);
+
+  useEffect(() => {
+    if (manageTxHash || !pendingLock) {
+      manageRetryRef.current = false;
+    }
+  }, [manageTxHash, pendingLock]);
 
   useEffect(() => {
     if (isAllowanceConfirmed && !pendingLock) {
@@ -1094,7 +1165,7 @@ const LockStep = ({
         allowanceTimeoutRef.current = null;
         setPendingLock(null);
         pushManageError('Approval request timed out. Please try again.');
-      }, 30_000);
+      }, 90_000);
       return () => {
         if (allowanceTimeoutRef.current) {
           clearTimeout(allowanceTimeoutRef.current);
@@ -1114,7 +1185,7 @@ const LockStep = ({
         resetManageWrite();
         manageTimeoutRef.current = null;
         pushManageError('Lock transaction timed out. Please try again.');
-      }, 30_000);
+      }, 90_000);
       return () => {
         if (manageTimeoutRef.current) {
           clearTimeout(manageTimeoutRef.current);
@@ -1165,6 +1236,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
 
   const triggerLock = async ({ amount, duration }: { amount: bigint; duration: bigint }) => {
     try {
+      manageRetryRef.current = true;
       await writeManageLock({
         address: targetRegistryAddress,
         abi: tokenRegistryAbi,
@@ -1176,6 +1248,28 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
       setPendingLock(null);
     }
   };
+
+  useEffect(() => {
+    const attemptManageLock = () => {
+      if (!isAllowanceConfirmed || !pendingLock || manageTxHash || isManagePending) {
+        return;
+      }
+      if (manageRetryRef.current) return;
+      manageRetryRef.current = true;
+      void triggerLock(pendingLock);
+    };
+    const handleResume = () => {
+      manageRetryRef.current = false;
+      attemptManageLock();
+    };
+    window.addEventListener('focus', handleResume);
+    document.addEventListener('visibilitychange', handleResume);
+    attemptManageLock();
+    return () => {
+      window.removeEventListener('focus', handleResume);
+      document.removeEventListener('visibilitychange', handleResume);
+    };
+  }, [isAllowanceConfirmed, pendingLock, manageTxHash, isManagePending, triggerLock]);
 
   const handleResetApproval = async () => {
     if (!walletConnected || !walletAddress) {
@@ -1238,8 +1332,8 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     }
 
     const amountWei = additionalAmountWei;
-    const allowanceWei = tokeregistryAllowance ? BigInt(tokeregistryAllowance.amount_raw_wei) : 0n;
-    const needsAllowanceTopUp = amountWei > allowanceWei;
+  const allowanceWei = tokeregistryAllowance ? BigInt(tokeregistryAllowance.amount_raw_wei) : 0n;
+  const needsAllowanceTopUp = amountWei > allowanceWei;
     let submittedDurationSeconds = selectedLockDurationSeconds;
     if (hasExistingLock && amountWei > 0n) {
       const requiredDuration = calculateRequiredAdditionalDuration(
@@ -1317,7 +1411,18 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
   };
 
   if (!connectComplete) {
-    return <></>;
+    return (
+      <section className="step-card lock-step">
+        <div className="lock-grid">
+          <div className="lock-card">
+            <span className="lock-card-label">Connect required</span>
+            <span className="lock-card-value">
+              Connect to a wallet to use this application. If you have already connected and are still seeing this message, please manually refresh the page.
+            </span>
+          </div>
+        </div>
+      </section>
+    );
   }
 
   const lockHeaderSubtitle = 'Lock an amount of HYPR for a specified duration to use in bindings.';
@@ -1618,6 +1723,8 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
           addDynamicMaxMs !== null &&
           addDynamicMinMs < extendMinMillis - twentyFourHoursMs &&
           addDynamicMaxMs > extendMinMillis + twentyFourHoursMs));
+  const waitingForManagePrompt =
+    isAllowanceConfirmed && pendingLock && !manageTxHash && !isManagePending && !isManageConfirming;
   const specialDateOptions = useMemo(() => buildSpecialDateOptions(), []);
   const lockFilteredSpecialDates = useMemo(() => {
     if (!isMobile) return specialDateOptions;
@@ -1631,6 +1738,15 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
       setLockMobileDateChoice(null);
     }
   }, [lockFilteredSpecialDates]);
+  const minFinalDurationLabel = simulationMode ? '4 minutes' : '4 weeks';
+  const lockMobileGroupLabel =
+    hasExistingLock && (lockView === 'manage' || lockView === 'extend')
+      ? lockFilteredSpecialDates.length > 0
+        ? 'Select new duration or date'
+        : 'Select new duration'
+      : lockFilteredSpecialDates.length > 0
+        ? 'Select duration or date'
+        : 'Select duration';
   const addRangeLabel =
     lockView === 'manage' && hasExistingLock && amountValue > 0
       ? `By adding ${amountInput} HYPR, you may also change the lock expiration to a new date between ${formatDateIso(addDisplayMinDateForHint)} and ${formatDateIso(lockEndDateDisplayMax)}`
@@ -1729,7 +1845,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                 )}
                 {!lockExpired && hyprOwnedWei > 0n && (
                   <button type="button" className="secondary-button ghost" onClick={handleShowManagePanel}>
-                    Add HYPR to lock
+                    Add HYPR
                   </button>
                 )}
                 {txNotice && (
@@ -1796,12 +1912,12 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
               <>
                 {hasExistingLock && lockView === 'manage' && additionalAmountWei > 0n && !exceedsLockAvailable && (
                   <div className="input-subtext">
-                    The more HYPR you add to your existing lock, the more you can optionally adjust its existing expiration date.
+                    {`Adding HYPR to your lock may allow you to optionally reduce its duration, up to a minimum final duration of ${minFinalDurationLabel} depending on the initial lock and the amount being added.`}
                   </div>
                 )}
                 <div className="mobile-duration-group">
                   <span className="mobile-group-title">
-                    {lockFilteredSpecialDates.length > 0 ? 'Select duration or date' : 'Select duration'}
+                {lockMobileGroupLabel}
                   </span>
                   <div className="input-grid mobile-duration-row">
                     <div className="input-field mobile-duration-select">
@@ -1960,6 +2076,11 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
               </button>
             )}
           </div>
+          {waitingForManagePrompt && (
+            <div className="lock-card-sub">
+              Waiting for lock confirmation in your wallet. If you don’t see a prompt, open MetaMask to continue.
+            </div>
+          )}
           {manageError && (
             <div className="inline-error" ref={manageErrorRef}>
               {manageError.text}
@@ -2145,16 +2266,6 @@ const BindStep = ({
     }
   }, [transferError]);
 
-  useEffect(() => {
-    if (transferError && transferErrorRef.current) {
-      const rect = transferErrorRef.current.getBoundingClientRect();
-      const fullyInView = rect.top >= 0 && rect.bottom <= window.innerHeight;
-      if (!fullyInView) {
-        transferErrorRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    }
-  }, [transferError]);
-
   const transferNowSecondsRef = useRef(Math.floor(Date.now() / 1000));
   const transferNowSeconds = transferNowSecondsRef.current;
   const minDurationSecondsBigInt = BigInt(minLockDurationSeconds);
@@ -2226,6 +2337,14 @@ const BindStep = ({
       setTransferMobileDateChoice(null);
     }
   }, [transferFilteredSpecialDates]);
+  const transferMobileGroupLabel =
+    bindView === 'extend'
+      ? transferFilteredSpecialDates.length > 0
+        ? 'Select new duration or date'
+        : 'Select new duration'
+      : transferFilteredSpecialDates.length > 0
+        ? 'Select duration or date'
+        : 'Select duration';
   const transferExpiryHintLabel = useMemo(
     () => (bindView === 'extend' ? 'New Expiry:' : 'Expires at'),
     [bindView],
@@ -2500,16 +2619,6 @@ const BindStep = ({
     if (transferSuccessHash) {
       const timeout = setTimeout(() => setTransferSuccessHash(null), 10_000);
       return () => clearTimeout(timeout);
-    }
-  }, [transferSuccessHash]);
-
-  useEffect(() => {
-    if (transferSuccessHash && transferSuccessRef.current) {
-      const rect = transferSuccessRef.current.getBoundingClientRect();
-      const fullyInView = rect.top >= 0 && rect.bottom <= window.innerHeight;
-      if (!fullyInView) {
-        transferSuccessRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
     }
   }, [transferSuccessHash]);
 
@@ -2852,7 +2961,7 @@ const BindStep = ({
           <>
             <div className="mobile-duration-group">
               <span className="mobile-group-title">
-                {transferFilteredSpecialDates.length > 0 ? 'Select duration or date' : 'Select duration'}
+                {transferMobileGroupLabel}
               </span>
               <div className="input-grid mobile-duration-row">
                 <div className="input-field mobile-duration-select">
