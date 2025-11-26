@@ -17,3 +17,4 @@ pkg/ui
 */process_env
 .env
 /.idea
+ui/dist
