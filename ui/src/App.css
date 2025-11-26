@@ -248,6 +248,16 @@
   color: var(--text-secondary);
 }
 
+.lock-detail-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+.lock-detail-actions > * + * {
+  margin-left: 0.5rem;
+}
+
 .lock-card-divider {
   height: 1px;
   width: 100%;
@@ -491,7 +501,14 @@
 }
 
 .tab-title {
-  font-weight: 600;
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.bottom-tab.tab-lock.active .tab-title,
+.bottom-tab.tab-bind.active .tab-title {
+  font-weight: 750;
+  font-size: 1.05rem;
 }
 
 
@@ -562,6 +579,7 @@
 .form-actions {
   display: flex;
   justify-content: flex-start;
+  gap: 0.5rem;
 }
 
 .refresh-inline-button {
@@ -681,6 +699,50 @@ input.date-picker-input::placeholder {
   filter: invert(0.85);
   opacity: 0.9;
   cursor: pointer;
+}
+
+.mobile-duration-select select {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font-size: 1rem;
+}
+
+.mobile-duration-row {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.mobile-duration-row .input-field {
+  flex: 1;
+}
+
+.mobile-duration-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.mobile-group-title {
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.mobile-group-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  display: block;
+  margin-bottom: 0.15rem;
+}
+
+.mobile-sub-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  margin-bottom: 0.1rem;
+  display: block;
 }
 
 .react-datepicker-time__input input {
