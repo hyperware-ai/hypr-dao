@@ -8,7 +8,7 @@
     "publisher": "ware.hypr",
     "mirrors": ["ware.hypr", "nick.hypr", "nick1udwig.os"],
     "code_hashes": {
-      "0.1.0": ""
+      "0.1.0": "9c181b02aa04006718bd46d1584a47badb06e2f1b5b23065f2a79d993e68e0fe"
     },
     "wit_version": 1,
     "dependencies": []
