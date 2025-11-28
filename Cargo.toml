@@ -5,7 +5,7 @@ panic = "abort"
 
 [workspace]
 members = [
-    "lock-and-bind",
+    "hypr-dao",
     "target/lock-and-bind-caller-util?",
 ]
 resolver = "2"

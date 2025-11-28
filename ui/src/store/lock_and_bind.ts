@@ -2,7 +2,7 @@
 import { create } from 'zustand';
 import type { LockAndBindState, LockStatusPayload } from '../types/lock_and_bind';
 import { getNodeId } from '../types/global';
-import { App } from '#caller-utils';
+import { HyprDao } from '#caller-utils';
 
 interface LockAndBindStore extends LockAndBindState {
   initialize: () => void;
@@ -47,7 +47,7 @@ export const useBindAndLockStore = create<LockAndBindStore>((set, get) => ({
   fetchLockStatus: async () => {
     set({ isLoading: true, error: null });
     try {
-      const status = await App.get_lock_status();
+      const status = await HyprDao.get_lock_status();
       applyStatus(status, set);
     } catch (error) {
       set({
@@ -61,7 +61,7 @@ export const useBindAndLockStore = create<LockAndBindStore>((set, get) => ({
     // Keep refresh silent to avoid UI jitter on periodic polls
     set({ error: null });
     try {
-      const status = await App.refresh_lock_status();
+      const status = await HyprDao.refresh_lock_status();
       applyStatus(status, set);
     } catch (error) {
       set({
@@ -74,7 +74,7 @@ export const useBindAndLockStore = create<LockAndBindStore>((set, get) => ({
   clearError: () => set({ error: null }),
   acknowledgeLockModal: async () => {
     try {
-      await App.acknowledge_lock_modal();
+      await HyprDao.acknowledge_lock_modal();
       set({ lockModalSeen: true });
     } catch (error) {
       set({ error: getErrorMessage(error) });

@@ -1,0 +1,38 @@
+[dependencies]
+alloy-primitives = "0.8.15"
+anyhow = "1.0"
+process_macros = "0.1"
+serde_json = "1.0"
+wit-bindgen = "0.42.1"
+
+[dependencies.hyperprocess_macro]
+git = "https://github.com/hyperware-ai/hyperprocess-macro"
+rev = "aaf7e02"
+
+[dependencies.hyperware_process_lib]
+features = ["hyperapp"]
+git = "https://github.com/hyperware-ai/process_lib.git"
+rev = "26565b9c7c53fd6b66845c15ca14caa9d801d821"
+
+[dependencies.lock_and_bind_caller_utils]
+optional = true
+path = "../target/lock-and-bind-caller-utils"
+
+[dependencies.serde]
+features = ["derive"]
+version = "1.0"
+
+[features]
+caller-utils = ["lock_and_bind_caller_utils"]
+simulation-mode = []
+
+[lib]
+crate-type = ["cdylib"]
+
+[package]
+edition = "2021"
+name = "hypr-dao"
+version = "0.1.0"
+
+[package.metadata.component]
+package = "hyperware:process"
