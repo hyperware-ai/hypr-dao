@@ -112,6 +112,12 @@ const SECONDS_PER_MONTH = 30 * SECONDS_PER_DAY;
 const SECONDS_PER_YEAR = 365 * SECONDS_PER_DAY;
 const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+const COLLAPSE_BUFFER_MS = 2 * 60 * 1000;
+const normalizeToMinute = (ms: number) => {
+  const d = new Date(ms);
+  d.setSeconds(0, 0);
+  return d.getTime();
+};
 
 type DurationField = 'years' | 'months' | 'weeks' | 'days' | 'hours' | 'minutes' | 'seconds';
 type DurationMode = 'duration' | 'end-date';
@@ -783,6 +789,10 @@ const LockStep = ({
   const [lockCustomDateMs, setLockCustomDateMs] = useState<number | null>(null);
   const [lockCustomModalDate, setLockCustomModalDate] = useState<string>('');
   const [lockCustomModalTime, setLockCustomModalTime] = useState<string>('');
+  const [diagModal, setDiagModal] = useState<{
+    title: string;
+    rows: { label: string; value: string }[];
+  } | null>(null);
   const [manageError, setManageError] = useState<BannerMessage | null>(null);
   const [txNotice, setTxNotice] = useState<BannerMessage & { kind: 'success' | 'error' } | null>(
     null,
@@ -1538,13 +1548,13 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
 
   const addWeightedMinMsRaw = useMemo(() => {
     if (!hasExistingLock || lockView !== 'manage') return null;
-    if (!addWeightedMinDurationSeconds) return currentExpiryMs ?? extendMinMillis;
+    if (!addWeightedMinDurationSeconds) return currentExpiryMs ?? lockEndDateMin.getTime();
     return Number((BigInt(nowSeconds) + addWeightedMinDurationSeconds) * 1000n);
   }, [
     addWeightedMinDurationSeconds,
     currentExpiryMs,
-    extendMinMillis,
     hasExistingLock,
+    lockEndDateMin,
     lockView,
     nowSeconds,
   ]);
@@ -1601,19 +1611,16 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     return false;
   }, [extendEndDateDisplayMin, hasExistingLock, lockEndDateDisplayMax, lockEndDateDisplayMin, lockView]);
 
-  const actualMinMsForView = useMemo(
-    () => {
-      if (lockView === 'extend') {
-        return extendMinMillis;
-      }
+  const actualMinMsForView = useMemo(() => {
+    if (lockView === 'extend') {
+      return extendMinMillis;
+    }
     if (lockView === 'manage' && hasExistingLock) {
-      const raw = addWeightedMinMsRaw ?? extendMinMillis;
-      return Math.max(raw, extendMinMillis);
+      const raw = addWeightedMinMsRaw ?? lockEndDateMin.getTime();
+      return Math.max(raw, lockEndDateMin.getTime());
     }
     return lockEndDateMin.getTime();
-  },
-    [addWeightedMinMsRaw, extendMinMillis, hasExistingLock, lockEndDateMin, lockView],
-  );
+  }, [addWeightedMinMsRaw, hasExistingLock, lockEndDateMin, lockView, extendMinMillis]);
   const pickerMinDateForView = useMemo(() => {
     const d = new Date(actualMinMsForView);
     d.setHours(0, 0, 0, 0);
@@ -1654,6 +1661,61 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     const ms = candidate.getTime();
     return ms < actualMinMsForView || ms > maxMsForView;
   }, [actualMinMsForView, lockCustomModalDate, lockCustomModalTime, maxMsForView]);
+  const lockCustomPrefillMs = useMemo(() => {
+    const baseRaw = lockEndDateInput ?? new Date(defaultEndMsForView);
+    const plusBuffer = baseRaw.getTime() + 60 * 1000;
+    const clamped = Math.min(Math.max(plusBuffer, actualMinMsForView), maxMsForView);
+    return normalizeToMinute(clamped);
+  }, [actualMinMsForView, defaultEndMsForView, lockEndDateInput, maxMsForView]);
+  const lockRangeCollapsed = actualMinMsForView + COLLAPSE_BUFFER_MS >= maxMsForView;
+  useEffect(() => {
+    if (!lockRangeCollapsed) return;
+    const minDate = new Date(actualMinMsForView);
+    setLockEndDateInput(minDate);
+    setLockEndTimeInput(formatTimeFromDate(minDate));
+    setLockEndTimeDirty(true);
+    setLockDurationDirty(true);
+    setLockMobileDuration('');
+    setLockMobileDateChoice(null);
+    setLockCustomDateMs(null);
+    setShowLockCustomModal(false);
+  }, [actualMinMsForView, lockRangeCollapsed]);
+  const handleLockDateClick = () => {
+    const baseRaw = lockEndDateInput ?? new Date(defaultEndMsForView);
+    const plusBuffer = baseRaw.getTime() + 60 * 1000;
+    const clampedMs = Math.min(Math.max(plusBuffer, actualMinMsForView), maxMsForView);
+    const base = new Date(clampedMs);
+    setLockCustomModalDate(formatDateIso(base));
+    setLockCustomModalTime(formatTimeFromDate(base).slice(0, 5));
+    setShowLockCustomModal(true);
+    setLockMobileDateChoice('__custom__');
+    setLockMobileDuration('');
+  };
+  const openLockDiagnostics = () => {
+    const actualMin = actualMinMsForView;
+    const minDuration =
+      lockView === 'manage' && hasExistingLock
+        ? addDynamicMinMsBuffered ?? null
+        : displayMinDateForHint.getTime();
+    const defaultMs = defaultEndMsForView;
+    const actualMax = maxMsForView;
+    const maxDuration =
+      lockView === 'manage' && hasExistingLock
+        ? currentExpiryMs ?? actualMax
+        : actualMax;
+    const rows = [
+      { label: 'Actual minimum', value: formatMsWithSeconds(actualMin) },
+      { label: 'MIN duration option', value: formatMsWithSeconds(minDuration) },
+      { label: 'Default end', value: formatMsWithSeconds(defaultMs) },
+      {
+        label: lockView === 'manage' && hasExistingLock ? 'NO CHANGE (current expiry)' : 'MAX duration option',
+        value: formatMsWithSeconds(maxDuration),
+      },
+      { label: 'Initial custom modal time', value: formatMsWithSeconds(lockCustomPrefillMs) },
+      { label: 'Actual maximum', value: formatMsWithSeconds(actualMax) },
+    ];
+    setDiagModal({ title: 'Lock diagnostics', rows });
+  };
 
   const lockMobileDurationOptions = useMemo(() => {
     if (isMobile && lockView === 'manage' && hasExistingLock) {
@@ -1835,11 +1897,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     isAllowanceConfirmed && pendingLock && !manageTxHash && !isManagePending && !isManageConfirming;
   const specialDateOptions = useMemo(() => buildSpecialDateOptions(), []);
   const lockFilteredSpecialDates = useMemo(() => {
-    let base = specialDateOptions;
-    if (lockView === 'manage') {
-      base = [];
-    }
-    let filtered = base.filter(
+    let filtered = specialDateOptions.filter(
       (opt) =>
         opt.date.getTime() >= minEndDateForValidationMs && opt.date.getTime() <= maxMsForView,
     );
@@ -1889,12 +1947,8 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
   const minFinalDurationLabel = simulationMode ? '4 minutes' : '4 weeks';
   const lockMobileGroupLabel =
     hasExistingLock && (lockView === 'manage' || lockView === 'extend')
-      ? lockFilteredSpecialDates.length > 0
-        ? 'Select new duration or date'
-        : 'Select new duration'
-      : lockFilteredSpecialDates.length > 0
-        ? 'Select duration or date'
-        : 'Select duration';
+      ? 'Select new duration or date'
+      : 'Select duration or date';
   const addRangeLabel =
     lockView === 'manage' && hasExistingLock && amountValue > 0
       ? `By adding ${amountInput} HYPR, you may also change the lock expiration to a new date between ${formatDateIso(addDisplayMinDateForHint)} and ${formatDateIso(lockEndDateDisplayMax)}`
@@ -2036,7 +2090,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
         </div>
       )}
 
-      {(lockView === 'manage' || lockView === 'extend') && (
+          {(lockView === 'manage' || lockView === 'extend') && (
         <form className="lock-form" onSubmit={handleManageLock}>
           <div className="form-header">
             <div className="form-header-text">
@@ -2049,6 +2103,11 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
               </h3>
               {lockView === 'manage' && !hasExistingLock && <p>{lockHeaderSubtitle}</p>}
             </div>
+            {(lockView === 'manage' || lockView === 'extend') && (
+              <button type="button" className="secondary-button ghost diag-button" onClick={openLockDiagnostics}>
+                Diagnostics
+              </button>
+            )}
           </div>
           {lockView !== 'extend' && (
           <div className="input-grid">
@@ -2106,15 +2165,16 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                     {`Adding HYPR to your lock may allow you to optionally reduce its duration, up to a minimum final duration of ${minFinalDurationLabel} depending on the initial lock and the amount being added.`}
                   </div>
                 )}
-                <div className="mobile-duration-group">
-                  <span className="mobile-group-title">
+                {!lockRangeCollapsed && (
+                  <div className="mobile-duration-group">
+                    <span className="mobile-group-title">
                 {lockMobileGroupLabel}
-                  </span>
-                  <div className="input-grid mobile-duration-row">
-                    <div className="input-field mobile-duration-select">
-                      {lockFilteredSpecialDates.length > 0 && <label className="mobile-sub-label">Duration</label>}
-                      <select
-                        value={lockMobileDuration}
+                    </span>
+                    <div className="input-grid mobile-duration-row">
+                      <div className="input-field mobile-duration-select">
+                        <label className="mobile-sub-label">Duration</label>
+                        <select
+                          value={lockMobileDuration}
                           onChange={(event) => {
                             const nextVal = event.target.value;
                             setLockMobileDuration(nextVal);
@@ -2127,86 +2187,38 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                               setLockEndTimeInput('00:00:00');
                               return;
                             }
-                          setLockMobileDateChoice('');
-                          const opt = lockMobileDurationOptions.find((o) => o.value === nextVal);
-                          if (opt) {
-                            applyLockMobileDuration(opt.seconds);
-                          }
-                        }}
-                      >
-                        <option value="">--</option>
-                        {lockMobileDurationOptions.map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    {lockFilteredSpecialDates.length > 0 && (
-                      <div className="input-field mobile-duration-select">
-                        <label className="mobile-sub-label">Date</label>
-                          <select
-                            value={lockMobileDateChoice ?? ''}
-                            onChange={(event) => {
-                            const nextVal = event.target.value;
-                            if (nextVal === '__custom__') {
-                              const baseRaw = lockEndDateInput ?? new Date(defaultEndMsForView);
-                              const plusBuffer = baseRaw.getTime() + 60 * 1000;
-                              const clampedMs = Math.min(
-                                Math.max(plusBuffer, actualMinMsForView),
-                                maxMsForView,
-                              );
-                              const base = new Date(clampedMs);
-                              setLockCustomModalDate(formatDateIso(base));
-                              setLockCustomModalTime(formatTimeFromDate(base).slice(0, 5));
-                              setShowLockCustomModal(true);
-                              setLockMobileDateChoice('__custom__');
-                              setLockMobileDuration('');
-                              return;
-                            }
-                            setLockMobileDateChoice(nextVal);
-                            if (lockCustomDateMs && nextVal !== lockCustomDateMs.toString()) {
-                              setLockCustomDateMs(null);
-                            }
-                            if (nextVal === '') {
-                              setLockEndDateInput(null);
-                              setLockEndTimeInput('00:00:00');
-                              return;
-                            }
-                            setLockMobileDuration('');
-                            const selected = lockFilteredSpecialDates.find((o) => o.value === nextVal);
-                            if (selected) {
-                              const next = new Date(Number(selected.value));
-                              setLockEndDateInput(next);
-                              setLockEndTimeInput(formatTimeFromDate(next));
-                              setLockEndTimeDirty(true);
-                              setLockDurationDirty(true);
+                            setLockMobileDateChoice('');
+                            const opt = lockMobileDurationOptions.find((o) => o.value === nextVal);
+                            if (opt) {
+                              applyLockMobileDuration(opt.seconds);
                             }
                           }}
                         >
                           <option value="">--</option>
-                          {lockFilteredSpecialDates.map((opt) => (
+                          {lockMobileDurationOptions.map((opt) => (
                             <option key={opt.value} value={opt.value}>
                               {opt.label}
                             </option>
                           ))}
                         </select>
                       </div>
-                    )}
+                      <div className="input-field mobile-duration-select">
+                        <label className="mobile-sub-label">Date</label>
+                        <input
+                          type="text"
+                          readOnly
+                          value={lockCustomDateMs ? formatShortDateLabel(new Date(lockCustomDateMs)) : '--'}
+                          onClick={handleLockDateClick}
+                        />
+                      </div>
+                    </div>
                   </div>
-                </div>
+                )}
                 {lockEndDateInput && (
                   <div className="input-subtext mobile-expiry-hint">
                     {lockExpiryHintLabel}{' '}
                     {formatTimestamp(Math.floor(lockEndDateInput.getTime() / 1000))}
-                    {lockMobileDateChoice
-                      ? (() => {
-                          const legend = lockFilteredSpecialDates.find(
-                            (opt) => opt.value === lockMobileDateChoice,
-                          )?.legend;
-                          return legend ? ` (${legend})` : '';
-                        })()
-                      : ''}
+                    {lockCustomDateMs ? ' (custom)' : ''}
                   </div>
                 )}
               </>
@@ -2362,7 +2374,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
         <div className="modal-backdrop">
           <div className="modal-card">
             <h3>Choose custom expiry</h3>
-              <div className="input-grid">
+            <div className="input-grid">
                 <label className="input-field">
                   <span>Date</span>
                   <input
@@ -2422,6 +2434,25 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
           </div>
         </div>
       )}
+      {diagModal && (
+        <div className="modal-backdrop">
+          <div className="modal-card">
+            <h3>{diagModal.title}</h3>
+            <ul className="diag-list">
+              {diagModal.rows.map((row) => (
+                <li key={row.label}>
+                  <strong>{row.label}:</strong> {row.value}
+                </li>
+              ))}
+            </ul>
+            <div className="modal-actions">
+              <button type="button" className="secondary-button" onClick={() => setDiagModal(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 };
@@ -2478,6 +2509,14 @@ const BindStep = ({
   const [extendBindingName, setExtendBindingName] = useState<string | null>(null);
   const [addHyprBindingName, setAddHyprBindingName] = useState<string | null>(null);
   const [extendBindingUnlockMs, setExtendBindingUnlockMs] = useState<number | null>(null);
+  const [bindDiagModal, setBindDiagModal] = useState<{
+    title: string;
+    rows: { label: string; value: string }[];
+  } | null>(null);
+  const [showTransferCustomModal, setShowTransferCustomModal] = useState(false);
+  const [transferCustomDateMs, setTransferCustomDateMs] = useState<number | null>(null);
+  const [transferCustomModalDate, setTransferCustomModalDate] = useState<string>('');
+  const [transferCustomModalTime, setTransferCustomModalTime] = useState<string>('');
   const transferErrorIdRef = useRef(0);
   const transferErrorRef = useRef<HTMLDivElement | null>(null);
   const transferSuccessRef = useRef<HTMLDivElement | null>(null);
@@ -2598,16 +2637,18 @@ const BindStep = ({
     [lockExpiryMs, transferEndDateMaxFallback],
   );
   const effectiveTransferEndDateMinMs = useMemo(() => {
+    const baseMin = transferEndDateMin.getTime();
     if (bindView === 'extend' && extendBindingUnlockMs !== null) {
       const buffered = extendBindingUnlockMs + 60_000;
-      return Math.min(buffered, transferEndDateMax.getTime());
+      return Math.max(buffered, baseMin);
     }
-    return transferEndDateMin.getTime();
-  }, [bindView, extendBindingUnlockMs, transferEndDateMax, transferEndDateMin]);
-  const effectiveTransferEndDateMaxMs = useMemo(
-    () => transferEndDateMax.getTime(),
-    [transferEndDateMax],
-  );
+    return baseMin;
+  }, [bindView, extendBindingUnlockMs, transferEndDateMin]);
+  const effectiveTransferEndDateMaxMs = useMemo(() => {
+    const raw = transferEndDateMax.getTime();
+    // Ensure max is never below min so collapsed windows remain valid
+    return Math.max(raw, effectiveTransferEndDateMinMs);
+  }, [transferEndDateMax, effectiveTransferEndDateMinMs]);
   const effectiveTransferEndDateDefault = useMemo(() => {
     if (bindView === 'add-hypr') return null;
     return new Date(effectiveTransferEndDateMaxMs);
@@ -2623,6 +2664,35 @@ const BindStep = ({
     if (bindView === 'add' || bindView === 'create') return effectiveTransferEndDateMaxMs;
     return 0;
   }, [bindView, effectiveTransferEndDateMaxMs]);
+  const openBindDiagnostics = () => {
+    const actualMin = bindHintMinMs || null;
+    const minDuration = bindHintMinMs || null;
+    const defaultMs = effectiveTransferEndDateDefault
+      ? effectiveTransferEndDateDefault.getTime()
+      : null;
+    const actualMax = bindHintMaxMs || null;
+    const maxDuration = bindHintMaxMs || null;
+    const transferCustomPrefillMs = (() => {
+      const baseRaw =
+        transferEndDateInput ??
+        (effectiveTransferEndDateDefault ?? new Date(effectiveTransferEndDateMaxMs));
+      const plusBuffer = baseRaw.getTime() + 60 * 1000;
+      const clamped = Math.min(
+        Math.max(plusBuffer, effectiveTransferEndDateMinMs),
+        effectiveTransferEndDateMaxMs,
+      );
+      return normalizeToMinute(clamped);
+    })();
+    const rows = [
+      { label: 'Actual minimum', value: formatMsWithSeconds(actualMin) },
+      { label: 'MIN duration option', value: formatMsWithSeconds(minDuration) },
+      { label: 'Default end', value: formatMsWithSeconds(defaultMs) },
+      { label: bindView === 'extend' ? 'Lock duration' : 'MAX duration option', value: formatMsWithSeconds(maxDuration) },
+      { label: 'Initial custom modal time', value: formatMsWithSeconds(transferCustomPrefillMs) },
+      { label: 'Actual maximum', value: formatMsWithSeconds(actualMax) },
+    ];
+    setBindDiagModal({ title: 'Bind diagnostics', rows });
+  };
   const transferSpecialDateOptions = useMemo(() => buildSpecialDateOptions(), []);
   const transferMobileDurationOptions = useMemo(() => {
     if (!isMobile) return MOBILE_DURATION_OPTIONS;
@@ -2653,13 +2723,7 @@ const BindStep = ({
     }
   }, [transferFilteredSpecialDates]);
   const transferMobileGroupLabel =
-    bindView === 'extend'
-      ? transferFilteredSpecialDates.length > 0
-        ? 'Select new duration or date'
-        : 'Select new duration'
-      : transferFilteredSpecialDates.length > 0
-        ? 'Select duration or date'
-        : 'Select duration';
+    bindView === 'extend' ? 'Select new duration or date' : 'Select duration or date';
   const transferExpiryHintLabel = useMemo(
     () => (bindView === 'extend' ? 'New Expiry:' : 'Expires at'),
     [bindView],
@@ -2777,9 +2841,84 @@ const BindStep = ({
     dstNameInput.trim().length > 0 &&
     (transferAmountValue > 0 || bindView === 'extend') &&
     !transferExceedsAvailable;
+  const transferDateEnabled =
+    shouldShowTransferEndInputs && effectiveTransferEndDateMaxMs >= effectiveTransferEndDateMinMs;
+  const transferRangeCollapsed =
+    transferDateEnabled &&
+    effectiveTransferEndDateMinMs + COLLAPSE_BUFFER_MS >= effectiveTransferEndDateMaxMs;
+  useEffect(() => {
+    if (!transferRangeCollapsed) return;
+    const minDate = new Date(effectiveTransferEndDateMinMs);
+    setTransferEndDateInput(minDate);
+    setTransferEndTimeInput(formatTimeFromDate(minDate));
+    setTransferEndTimeDirty(true);
+    setTransferDurationDirty(true);
+    setTransferMobileDuration('');
+    setTransferMobileDateChoice(null);
+    setTransferCustomDateMs(null);
+    setShowTransferCustomModal(false);
+  }, [effectiveTransferEndDateMinMs, transferRangeCollapsed]);
+  const handleTransferCustomCancel = () => {
+    setShowTransferCustomModal(false);
+    setTransferCustomDateMs(null);
+    setTransferMobileDateChoice(null);
+    setTransferEndDateInput(null);
+    setTransferEndTimeInput('00:00:00');
+    setTransferEndTimeDirty(false);
+    setTransferDurationDirty(false);
+    setTransferCustomModalDate('');
+    setTransferCustomModalTime('');
+  };
+  const transferCustomSetDisabled = useMemo(() => {
+    if (!transferCustomModalDate || !transferCustomModalTime) return true;
+    const candidate = new Date(`${transferCustomModalDate}T${transferCustomModalTime}:00`);
+    if (Number.isNaN(candidate.getTime())) return true;
+    const ms = candidate.getTime();
+    return ms < effectiveTransferEndDateMinMs || ms > effectiveTransferEndDateMaxMs;
+  }, [effectiveTransferEndDateMaxMs, effectiveTransferEndDateMinMs, transferCustomModalDate, transferCustomModalTime]);
+  const handleTransferCustomSet = () => {
+    if (!transferCustomModalDate || !transferCustomModalTime) {
+      setShowTransferCustomModal(false);
+      return;
+    }
+    const candidate = new Date(`${transferCustomModalDate}T${transferCustomModalTime}:00`);
+    if (Number.isNaN(candidate.getTime())) {
+      setShowTransferCustomModal(false);
+      return;
+    }
+    const ms = candidate.getTime();
+    if (ms < effectiveTransferEndDateMinMs || ms > effectiveTransferEndDateMaxMs) {
+      return;
+    }
+    setTransferCustomDateMs(ms);
+    setTransferMobileDateChoice(ms.toString());
+    setTransferEndDateInput(candidate);
+    setTransferEndTimeInput(formatTimeFromDate(candidate));
+    setTransferEndTimeDirty(true);
+    setTransferDurationDirty(true);
+    setTransferMobileDuration('');
+    setShowTransferCustomModal(false);
+  };
+  const handleTransferDateClick = () => {
+    if (!transferDateEnabled) return;
+    const baseRaw =
+      transferEndDateInput ??
+      (effectiveTransferEndDateDefault ?? new Date(effectiveTransferEndDateMaxMs));
+    const plusBuffer = baseRaw.getTime() + 60 * 1000;
+    const clampedMs = Math.min(
+      Math.max(plusBuffer, effectiveTransferEndDateMinMs),
+      effectiveTransferEndDateMaxMs,
+    );
+    const base = new Date(clampedMs);
+    setTransferCustomModalDate(formatDateIso(base));
+    setTransferCustomModalTime(formatTimeFromDate(base).slice(0, 5));
+    setShowTransferCustomModal(true);
+    setTransferMobileDateChoice('__custom__');
+    setTransferMobileDuration('');
+  };
   useEffect(() => {
     if (!isMobile) return;
-    if (!shouldShowTransferEndInputs) return;
+    if (!shouldShowTransferEndInputs || transferRangeCollapsed) return;
     const defaultOpt =
       bindView === 'add'
         ? transferMobileDurationOptions[transferMobileDurationOptions.length - 1]
@@ -2797,6 +2936,7 @@ const BindStep = ({
     applyTransferMobileDuration,
     isMobile,
     shouldShowTransferEndInputs,
+    transferRangeCollapsed,
     transferEndDateInput,
     transferMobileDateChoice,
     transferMobileDuration,
@@ -2805,21 +2945,10 @@ const BindStep = ({
   useEffect(() => {
     if (!isMobile) return;
     if (!shouldShowTransferEndInputs) return;
-    if (!transferEndDateInput && transferFilteredSpecialDates.length > 0) {
-      const first = transferFilteredSpecialDates[0];
-      setTransferMobileDateChoice(first.value);
-      const next = new Date(Number(first.value));
-      setTransferEndDateInput(next);
-      setTransferEndTimeInput(formatTimeFromDate(next));
-      setTransferEndTimeDirty(true);
-      setTransferDurationDirty(true);
-      setTransferDurationMode('end-date');
-    }
+    // Custom date modal handles date selection; no default date choice
   }, [
     isMobile,
     shouldShowTransferEndInputs,
-    transferEndDateInput,
-    transferFilteredSpecialDates,
   ]);
   const bindButtonDisabled =
     !walletConnected ||
@@ -3209,6 +3338,11 @@ const BindStep = ({
               {bindView === 'create' && <h3>Create first binding</h3>}
               {bindView === 'add' && <h3>Add new binding</h3>}
             </div>
+            {(bindView === 'create' || bindView === 'add' || bindView === 'extend') && (
+              <button type="button" className="secondary-button ghost diag-button" onClick={openBindDiagnostics}>
+                Diagnostics
+              </button>
+            )}
           </div>
 
           {bindView !== 'extend' && bindView !== 'add-hypr' && (
@@ -3279,7 +3413,7 @@ const BindStep = ({
             </>
           )}
 
-      {shouldShowTransferEndInputs &&
+      {shouldShowTransferEndInputs && !transferRangeCollapsed &&
         (isMobile ? (
           <>
             <div className="mobile-duration-group">
@@ -3288,7 +3422,7 @@ const BindStep = ({
               </span>
               <div className="input-grid mobile-duration-row">
                 <div className="input-field mobile-duration-select">
-                  {transferFilteredSpecialDates.length > 0 && <label className="mobile-sub-label">Duration</label>}
+                  <label className="mobile-sub-label">Duration</label>
                   <select
                     value={transferMobileDuration}
                     onChange={(event) => {
@@ -3300,6 +3434,7 @@ const BindStep = ({
                         return;
                       }
                       setTransferMobileDateChoice('');
+                      setTransferCustomDateMs(null);
                       const opt = transferMobileDurationOptions.find((o) => o.value === nextVal);
                       if (opt) {
                         applyTransferMobileDuration(opt.seconds);
@@ -3314,54 +3449,22 @@ const BindStep = ({
                     ))}
                   </select>
                 </div>
-                {transferFilteredSpecialDates.length > 0 && (
-                  <div className="input-field mobile-duration-select">
-                    <label className="mobile-sub-label">Date</label>
-                    <select
-                      value={transferMobileDateChoice ?? ''}
-                      onChange={(event) => {
-                        const nextVal = event.target.value;
-                        setTransferMobileDateChoice(nextVal);
-                        if (nextVal === '') {
-                          setTransferEndDateInput(null);
-                          setTransferEndTimeInput('00:00:00');
-                          return;
-                        }
-                        setTransferMobileDuration('');
-                        const selected = transferFilteredSpecialDates.find((o) => o.value === nextVal);
-                        if (selected) {
-                          const next = new Date(Number(selected.value));
-                          setTransferEndDateInput(next);
-                          setTransferEndTimeInput(formatTimeFromDate(next));
-                          setTransferEndTimeDirty(true);
-                          setTransferDurationDirty(true);
-                          setTransferDurationMode('end-date');
-                        }
-                      }}
-                    >
-                      <option value="">--</option>
-                      {transferFilteredSpecialDates.map((opt) => (
-                        <option key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
+                <div className="input-field mobile-duration-select">
+                  <label className="mobile-sub-label">Date</label>
+                  <input
+                    type="text"
+                    readOnly
+                    value={transferCustomDateMs ? formatShortDateLabel(new Date(transferCustomDateMs)) : '--'}
+                    onClick={handleTransferDateClick}
+                  />
+                </div>
               </div>
             </div>
             {transferEndDateInput && (
               <div className="input-subtext mobile-expiry-hint">
                 {transferExpiryHintLabel}{' '}
                 {formatTimestamp(Math.floor(transferEndDateInput.getTime() / 1000))}
-                {transferMobileDateChoice
-                  ? (() => {
-                      const legend = transferFilteredSpecialDates.find(
-                        (opt) => opt.value === transferMobileDateChoice,
-                      )?.legend;
-                      return legend ? ` (${legend})` : '';
-                    })()
-                  : ''}
+                {transferCustomDateMs ? ' (custom)' : ''}
               </div>
             )}
           </>
@@ -3439,6 +3542,72 @@ const BindStep = ({
           </div>
         )}
       </div>
+      {showTransferCustomModal && (
+        <div className="modal-backdrop">
+          <div className="modal-card">
+            <h3>Choose custom expiry</h3>
+            <div className="input-grid">
+              <label className="input-field">
+                <span>Date</span>
+                <input
+                  type="date"
+                  min={formatDateIso(new Date(effectiveTransferEndDateMinMs))}
+                  max={formatDateIso(new Date(effectiveTransferEndDateMaxMs))}
+                  value={transferCustomModalDate}
+                  onChange={(e) => setTransferCustomModalDate(e.target.value)}
+                />
+              </label>
+              <label className="input-field">
+                <span>Time</span>
+                <input
+                  type="time"
+                  step="60"
+                  value={transferCustomModalTime}
+                  onChange={(e) => setTransferCustomModalTime(e.target.value)}
+                />
+              </label>
+            </div>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={handleTransferCustomSet}
+                disabled={transferCustomSetDisabled}
+              >
+                Set
+              </button>
+              <button type="button" className="secondary-button ghost" onClick={handleTransferCustomCancel}>
+                Cancel
+              </button>
+            </div>
+            {transferCustomSetDisabled && (
+              <div className="input-subtext modal-hint">
+                The custom value must be between {formatDateTimeAmPm(effectiveTransferEndDateMinMs)} and{' '}
+                {formatDateTimeAmPm(effectiveTransferEndDateMaxMs)}.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {bindDiagModal && (
+        <div className="modal-backdrop">
+          <div className="modal-card">
+            <h3>{bindDiagModal.title}</h3>
+            <ul className="diag-list">
+              {bindDiagModal.rows.map((row) => (
+                <li key={row.label}>
+                  <strong>{row.label}:</strong> {row.value}
+                </li>
+              ))}
+            </ul>
+            <div className="modal-actions">
+              <button type="button" className="secondary-button" onClick={() => setBindDiagModal(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 };
@@ -3505,7 +3674,7 @@ const BottomTabs = ({ steps, activeStep, canAccessStep, onSelect }: BottomTabsPr
 
 const iconGlyph: Record<StepIcon, string> = {
   check: '✔',
-  lock: '🔒',
+  lock: 'BLOCK',
   chain: '⛓',
 };
 
@@ -3686,6 +3855,11 @@ const formatTimestamp = (seconds: number) => {
   const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
   const ampm = hours24 >= 12 ? 'PM' : 'AM';
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(hours12)}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${ampm}`;
+};
+
+const formatMsWithSeconds = (ms: number | null | undefined) => {
+  if (ms === null || ms === undefined || Number.isNaN(ms)) return 'N/A';
+  return formatTimestamp(Math.floor(ms / 1000));
 };
 
 

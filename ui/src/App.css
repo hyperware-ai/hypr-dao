@@ -879,6 +879,26 @@ input[type='number'] {
   margin-top: 0.5rem;
   width: 100%;
 }
+
+.diag-button {
+  height: 36px;
+  align-self: center;
+  padding: 0 0.75rem;
+  color: var(--primary-color);
+  border-color: var(--primary-color);
+  background: rgba(255, 255, 255, 0.04);
+  font-weight: 600;
+}
+
+.diag-list {
+  list-style: none;
+  padding-left: 0;
+  margin: 0 0 1rem 0;
+}
+
+.diag-list li + li {
+  margin-top: 0.35rem;
+}
 .expired-card {
   background: rgba(255, 165, 0, 0.15);
   border: 1px solid rgba(255, 165, 0, 0.6);
