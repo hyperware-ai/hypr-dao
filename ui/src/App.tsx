@@ -1584,10 +1584,11 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
   const maxMsForView = useMemo(() => {
     const base = lockEndDateMax.getTime();
     if (lockView === 'manage' && hasExistingLock && addDynamicMaxMs !== null) {
-      return Math.max(addDynamicMaxMs, extendMinMillis);
+      // For Add view, cap at current expiry but ensure it never falls below the protocol min window
+      return Math.max(addDynamicMaxMs, lockEndDateMin.getTime());
     }
     return base;
-  }, [addDynamicMaxMs, extendMinMillis, hasExistingLock, lockEndDateMax, lockView]);
+  }, [addDynamicMaxMs, hasExistingLock, lockEndDateMax, lockEndDateMin, lockView]);
 
   const lockEndDateDisplayMax = useMemo(() => {
     const base = new Date(maxMsForView);
@@ -1799,7 +1800,20 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
         }
       });
     return Array.from(dedup.values());
-  }, [hasExistingLock, isMobile, lockDetails?.unlock_timestamp, lockView, maxMsForView, minEndDateForValidationMs, nowSeconds]);
+  }, [
+    addDynamicMinMsBuffered,
+    addDynamicMaxMs,
+    additionalAmountWei,
+    currentExpiryMs,
+    existingDurationSeconds,
+    hasExistingLock,
+    isMobile,
+    lockDetails?.unlock_timestamp,
+    lockView,
+    maxMsForView,
+    minEndDateForValidationMs,
+    nowSeconds,
+  ]);
   const lockExpiryHintLabel = useMemo(() => {
     if (lockView === 'extend') return 'New Expiry:';
     if (lockView === 'manage' && hasExistingLock) {
@@ -3674,7 +3688,7 @@ const BottomTabs = ({ steps, activeStep, canAccessStep, onSelect }: BottomTabsPr
 
 const iconGlyph: Record<StepIcon, string> = {
   check: '✔',
-  lock: 'BLOCK',
+  lock: '🔒',
   chain: '⛓',
 };
 
