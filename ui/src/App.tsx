@@ -2075,7 +2075,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                     Add HYPR to lock
                   </button>
                 )}
-                {!lockExpired && lockAvailableWei === 0n && (
+                {!lockExpired && lockAvailableWei === 0n && hyprOwnedWei > 0n && (
                   <button
                     type="button"
                     className="secondary-button ghost"
@@ -3268,9 +3268,21 @@ const BindStep = ({
                       </div>
                       {!expired && (
                         <div className="binding-actions">
+                          {(() => {
+                            const extendMin = Math.max(
+                              (binding.unlock_timestamp ?? 0) * 1000 + 60_000,
+                              transferEndDateMin.getTime(),
+                            );
+                            const extendMax = Math.max(
+                              transferEndDateMax.getTime(),
+                              extendMin,
+                            );
+                            const extendDisabled = extendMin + COLLAPSE_BUFFER_MS >= extendMax;
+                            return (
                           <button
                             type="button"
                             className="pill-button"
+                            disabled={extendDisabled}
                             onClick={() => {
                               setUserSetBindView(true);
                               setBindView('extend');
@@ -3290,9 +3302,12 @@ const BindStep = ({
                           >
                             Extend binding
                           </button>
+                            );
+                          })()}
                           <button
                             type="button"
                             className="pill-button"
+                            disabled={!availableToBind || BigInt(availableToBind.amount_raw_wei) === 0n}
                             onClick={() => {
                               const bindingName = binding.name ?? '';
                               setUserSetBindView(true);
@@ -3333,6 +3348,7 @@ const BindStep = ({
           <button
             type="button"
             className="secondary-button"
+            disabled={!availableToBind || BigInt(availableToBind.amount_raw_wei) === 0n}
             onClick={() => {
               setUserSetBindView(true);
               setBindView('add');
