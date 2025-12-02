@@ -14,16 +14,16 @@ features = ["hyperapp"]
 git = "https://github.com/hyperware-ai/process_lib.git"
 rev = "26565b9c7c53fd6b66845c15ca14caa9d801d821"
 
-[dependencies.lock_and_bind_caller_utils]
+[dependencies.hypr_dao_caller_utils]
 optional = true
-path = "../target/lock-and-bind-caller-utils"
+path = "../target/hypr-dao-caller-utils"
 
 [dependencies.serde]
 features = ["derive"]
 version = "1.0"
 
 [features]
-caller-utils = ["lock_and_bind_caller_utils"]
+caller-utils = ["hypr_dao_caller_utils"]
 simulation-mode = []
 
 [lib]
