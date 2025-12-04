@@ -4,11 +4,7 @@ use hyperware_process_lib::{
     bindings::{Bindings, LockDetails as OnchainLockDetails, RegistrationDetails},
     eth::Provider,
     homepage::add_to_homepage,
-    hypermap,
-    println,
-    our,
-    Message,
-    Request,
+    hypermap, our, println, Message, Request,
 };
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -20,7 +16,7 @@ const LOCAL_CHAIN_ID: u64 = 31337;
 const LOCAL_CHAIN_ID: u64 = 8453;
 
 #[cfg(feature = "simulation-mode")]
-const LOCAL_TOKEN_REGISTRY: &str = "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6";
+const LOCAL_TOKEN_REGISTRY: &str = "0x0000000000e8d224B902632757d5dbc51a451456";
 #[cfg(not(feature = "simulation-mode"))]
 const LOCAL_TOKEN_REGISTRY: &str = "0x0000000000e8d224B902632757d5dbc51a451456";
 
@@ -34,8 +30,7 @@ const MIN_LOCK_DURATION_SECONDS: u64 = 4 * 60;
 #[cfg(not(feature = "simulation-mode"))]
 const MIN_LOCK_DURATION_SECONDS: u64 = 4 * 7 * 24 * 60 * 60;
 const HNS_INDEXER_TIMEOUT_S: u64 = 5;
-const ZERO_NAMEHASH: &str =
-    "0x0000000000000000000000000000000000000000000000000000000000000000";
+const ZERO_NAMEHASH: &str = "0x0000000000000000000000000000000000000000000000000000000000000000";
 
 mod hns_indexer_api {
     wit_bindgen::generate!({
@@ -268,8 +263,7 @@ impl HyprDaoState {
 
         println!(
             "Lock details for {} ({:?}) refreshed",
-            self.node_id,
-            self.owner_address
+            self.node_id, self.owner_address
         );
         Ok(())
     }
@@ -284,17 +278,15 @@ impl HyprDaoState {
                     return EthAddress::from_str(SIMULATION_OWNER)
                         .map_err(|_| "invalid simulation owner address constant".to_string());
                 }
-                Err(format!(
-                    "failed to resolve owner from hypermap: {err:?}"
-                ))
+                Err(format!("failed to resolve owner from hypermap: {err:?}"))
             }
         }
     }
 
     fn bindings_client() -> Result<Bindings, String> {
         let provider = Provider::new(LOCAL_CHAIN_ID, 30);
-        let address =
-            EthAddress::from_str(LOCAL_TOKEN_REGISTRY).map_err(|_| "invalid proxy address".to_string())?;
+        let address = EthAddress::from_str(LOCAL_TOKEN_REGISTRY)
+            .map_err(|_| "invalid proxy address".to_string())?;
         Ok(Bindings::new(provider, address))
     }
 

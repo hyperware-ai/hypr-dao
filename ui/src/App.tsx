@@ -45,7 +45,7 @@ const steps: StepConfig[] = [
 
 const TOKEN_REGISTRY_ADDRESSES: Record<number, `0x${string}`> = {
   [base.id]: '0x0000000000e8d224B902632757d5dbc51a451456',
-  [anvil.id]: '0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6',
+  [anvil.id]: '0x0000000000e8d224B902632757d5dbc51a451456',
 };
 
 const tokenRegistryAbi = [
@@ -426,7 +426,7 @@ function App() {
   const isMobile = useIsMobile();
   const lockExpired =
     lockDetails !== null &&
-    BigInt(lockDetails.amount_raw_wei ?? '0') > 0n &&
+    BigInt(lockDetails?.amount_raw_wei ?? '0') > 0n &&
     (lockDetails.remaining_seconds ?? 0) === 0;
   const { address, chain, isConnected: isWalletConnected } = useAccount();
   const { reconnect } = useReconnect();
@@ -621,9 +621,12 @@ function App() {
                 )}
                 {networkMismatch && (
                   <p>
-                    Switch your wallet network to {expectedChainName} (chain ID {expectedChainId}) to continue. You are on{' '}
+                    Switch THE wallet network to {expectedChainName} (chain ID {expectedChainId}) to continue. You are on{' '}
                     {chain ? chain.name : 'an unknown network'}.
                   </p>
+                )}
+                {networkMismatch && (
+                  <p className="warning-note">Use the network selector above or your wallet to switch networks.</p>
                 )}
               </div>
             )}
@@ -3861,7 +3864,7 @@ const DurationInputs = ({
 
 const TopStatusBar = () => (
   <div className="top-banner">
-    <ConnectButton chainStatus="icon" showBalance={false} />
+    <ConnectButton chainStatus="full" showBalance={false} />
   </div>
 );
 

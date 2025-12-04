@@ -15,8 +15,11 @@ if (!(window as { Buffer?: typeof Buffer }).Buffer) {
   (window as { Buffer?: typeof Buffer }).Buffer = Buffer;
 }
 
-const simulationMode = import.meta.env.VITE_SIMULATION_MODE === 'true';
-const chains = [base, ...(simulationMode ? ([anvil] as const) : [])] as const;
+const simulationMode =
+  import.meta.env.VITE_SIMULATION_MODE === 'true' || import.meta.env.MODE === 'development';
+// Also allow anvil when running locally so simulation builds can switch networks.
+const allowAnvil = simulationMode || window.location.hostname === 'localhost';
+const chains = [base, ...(allowAnvil ? ([anvil] as const) : [])] as const;
 const transports = chains.reduce<Record<number, ReturnType<typeof http>>>((acc, chain) => {
   acc[chain.id] = http();
   return acc;

@@ -6,13 +6,12 @@ serde_json = "1.0"
 wit-bindgen = "0.42.1"
 
 [dependencies.hyperprocess_macro]
-git = "https://github.com/hyperware-ai/hyperprocess-macro"
-rev = "aaf7e02"
+package = "hyperprocess-macro"
+path = "../hyperprocess_macro"
 
 [dependencies.hyperware_process_lib]
 features = ["hyperapp"]
-git = "https://github.com/hyperware-ai/process_lib.git"
-rev = "26565b9c7c53fd6b66845c15ca14caa9d801d821"
+path = "/Users/johnathanreale/RustroverProjects/process_lib"
 
 [dependencies.hypr_dao_caller_utils]
 optional = true

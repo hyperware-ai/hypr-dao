@@ -8,5 +8,6 @@ members = [
     "hypr-dao",
     "target/hypr-dao-caller-utils",
     "target/hypr-dao-caller-util?",
+    "hyperprocess_macro",
 ]
 resolver = "2"
