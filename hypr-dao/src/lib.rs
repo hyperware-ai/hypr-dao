@@ -135,7 +135,7 @@ impl HyprDaoState {
     async fn initialize(&mut self) {
         add_to_homepage("HYPR DAO", Some(ICON), Some("/"), None);
         self.node_id = our().node.clone();
-        if let Err(err) = self.refresh_lock_state() {
+        if let Err(err) = self.refresh_lock_state(None) {
             println!("Failed to load lock details: {}", err);
             self.last_error = Some(err);
         }
@@ -147,8 +147,35 @@ impl HyprDaoState {
     }
 
     #[http]
+    async fn get_lock_status_for(&mut self, address: String) -> Result<LockStatusPayload, String> {
+        let parsed =
+            EthAddress::from_str(&address).map_err(|_| "invalid owner address provided".to_string())?;
+        // Update the tracked owner to the requested address and refresh using existing logic.
+        self.owner_address = Some(format_address(parsed));
+        self.refresh_lock_state(Some(parsed))?;
+        Ok(self.current_status())
+    }
+
+    #[http]
     async fn refresh_lock_status(&mut self) -> Result<LockStatusPayload, String> {
-        match self.refresh_lock_state() {
+        match self.refresh_lock_state(None) {
+            Ok(_) => Ok(self.current_status()),
+            Err(err) => {
+                self.last_error = Some(err.clone());
+                Err(err)
+            }
+        }
+    }
+
+    #[http]
+    async fn refresh_lock_status_for(
+        &mut self,
+        address: String,
+    ) -> Result<LockStatusPayload, String> {
+        let parsed =
+            EthAddress::from_str(&address).map_err(|_| "invalid owner address provided".to_string())?;
+        self.owner_address = Some(format_address(parsed));
+        match self.refresh_lock_state(Some(parsed)) {
             Ok(_) => Ok(self.current_status()),
             Err(err) => {
                 self.last_error = Some(err.clone());
@@ -191,23 +218,30 @@ impl HyprDaoState {
         }
     }
 
-    fn refresh_lock_state(&mut self) -> Result<(), String> {
-        // For production, always re-resolve the owner to avoid stale cache; simulation-mode keeps the existing shortcut.
-        #[cfg(feature = "simulation-mode")]
-        let owner = match self.owner_address.clone() {
-            Some(addr) if !addr.is_empty() => EthAddress::from_str(&addr)
-                .map_err(|_| "cached owner address invalid".to_string())?,
-            _ => {
+    fn refresh_lock_state(&mut self, owner_override: Option<EthAddress>) -> Result<(), String> {
+        // If an override was provided (e.g., get_lock_status_for), use it; otherwise resolve normally.
+        let owner = if let Some(addr) = owner_override {
+            addr
+        } else {
+            // For production, always re-resolve the owner to avoid stale cache; simulation-mode keeps the existing shortcut.
+            #[cfg(feature = "simulation-mode")]
+            {
+                match self.owner_address.clone() {
+                    Some(addr) if !addr.is_empty() => EthAddress::from_str(&addr)
+                        .map_err(|_| "cached owner address invalid".to_string())?,
+                    _ => {
+                        let resolved = Self::resolve_owner_address()?;
+                        self.owner_address = Some(format_address(resolved));
+                        resolved
+                    }
+                }
+            }
+            #[cfg(not(feature = "simulation-mode"))]
+            {
                 let resolved = Self::resolve_owner_address()?;
-                self.owner_address = Some(resolved.to_string());
+                self.owner_address = Some(format_address(resolved));
                 resolved
             }
-        };
-        #[cfg(not(feature = "simulation-mode"))]
-        let owner = {
-            let resolved = Self::resolve_owner_address()?;
-            self.owner_address = Some(resolved.to_string());
-            resolved
         };
         let bindings = Self::bindings_client()?;
         let details = bindings
@@ -228,7 +262,7 @@ impl HyprDaoState {
             available_hypr
         };
 
-        self.owner_address = Some(owner.to_string());
+        self.owner_address = Some(format_address(owner));
         self.lock_details = Some(LockDetailsView::from(details));
         let bind_hashes = bindings
             .get_user_binds(owner)

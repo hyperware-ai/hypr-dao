@@ -612,7 +612,7 @@ function App() {
 
             {connectComplete && !environmentReady && (
               <div className="warning-card">
-                <h3>Connection required</h3>
+                <h3>Connection is required</h3>
                 {walletMismatch && (
                   <p>
                     Connect wallet <code>{ownerAddress}</code> to manage this node owner's HYPR locks and bindings. You are currently
