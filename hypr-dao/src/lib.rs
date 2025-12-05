@@ -4,30 +4,16 @@ use hyperware_process_lib::{
     bindings::{Bindings, LockDetails as OnchainLockDetails, RegistrationDetails},
     eth::Provider,
     homepage::add_to_homepage,
-    hypermap, our, println, Message, Request,
+    our, println, Message, Request,
 };
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 const ICON: &str = include_str!("./icon");
-#[cfg(feature = "simulation-mode")]
-const LOCAL_CHAIN_ID: u64 = 31337;
-#[cfg(not(feature = "simulation-mode"))]
 const LOCAL_CHAIN_ID: u64 = 8453;
 
-#[cfg(feature = "simulation-mode")]
-const LOCAL_TOKEN_REGISTRY: &str = "0x0000000000e8d224B902632757d5dbc51a451456";
-#[cfg(not(feature = "simulation-mode"))]
 const LOCAL_TOKEN_REGISTRY: &str = "0x0000000000e8d224B902632757d5dbc51a451456";
 
-#[cfg(feature = "simulation-mode")]
-const SIMULATION_OWNER: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
-#[cfg(not(feature = "simulation-mode"))]
-const SIMULATION_OWNER: &str = "0x0000000000000000000000000000000000000000";
-
-#[cfg(feature = "simulation-mode")]
-const MIN_LOCK_DURATION_SECONDS: u64 = 4 * 60;
-#[cfg(not(feature = "simulation-mode"))]
 const MIN_LOCK_DURATION_SECONDS: u64 = 4 * 7 * 24 * 60 * 60;
 const HNS_INDEXER_TIMEOUT_S: u64 = 5;
 const ZERO_NAMEHASH: &str = "0x0000000000000000000000000000000000000000000000000000000000000000";
@@ -219,29 +205,15 @@ impl HyprDaoState {
     }
 
     fn refresh_lock_state(&mut self, owner_override: Option<EthAddress>) -> Result<(), String> {
-        // If an override was provided (e.g., get_lock_status_for), use it; otherwise resolve normally.
+        // If an override was provided (e.g., get_lock_status_for), use it; otherwise rely on the cached owner.
         let owner = if let Some(addr) = owner_override {
             addr
         } else {
-            // For production, always re-resolve the owner to avoid stale cache; simulation-mode keeps the existing shortcut.
-            #[cfg(feature = "simulation-mode")]
-            {
-                match self.owner_address.clone() {
-                    Some(addr) if !addr.is_empty() => EthAddress::from_str(&addr)
-                        .map_err(|_| "cached owner address invalid".to_string())?,
-                    _ => {
-                        let resolved = Self::resolve_owner_address()?;
-                        self.owner_address = Some(format_address(resolved));
-                        resolved
-                    }
-                }
-            }
-            #[cfg(not(feature = "simulation-mode"))]
-            {
-                let resolved = Self::resolve_owner_address()?;
-                self.owner_address = Some(format_address(resolved));
-                resolved
-            }
+            let cached = self
+                .owner_address
+                .clone()
+                .ok_or_else(|| "owner address not set; connect a wallet".to_string())?;
+            EthAddress::from_str(&cached).map_err(|_| "cached owner address invalid".to_string())?
         };
         let bindings = Self::bindings_client()?;
         let details = bindings
@@ -302,21 +274,6 @@ impl HyprDaoState {
         Ok(())
     }
 
-    fn resolve_owner_address() -> Result<EthAddress, String> {
-        let node_name = our().node.clone();
-        let hypermap = hypermap::Hypermap::default(5);
-        match hypermap.get(&node_name) {
-            Ok((_, owner, _)) => Ok(owner),
-            Err(err) => {
-                if Self::is_simulation_mode() {
-                    return EthAddress::from_str(SIMULATION_OWNER)
-                        .map_err(|_| "invalid simulation owner address constant".to_string());
-                }
-                Err(format!("failed to resolve owner from hypermap: {err:?}"))
-            }
-        }
-    }
-
     fn bindings_client() -> Result<Bindings, String> {
         let provider = Provider::new(LOCAL_CHAIN_ID, 30);
         let address = EthAddress::from_str(LOCAL_TOKEN_REGISTRY)
@@ -324,9 +281,6 @@ impl HyprDaoState {
         Ok(Bindings::new(provider, address))
     }
 
-    fn is_simulation_mode() -> bool {
-        LOCAL_CHAIN_ID == 31337
-    }
 }
 
 impl From<OnchainLockDetails> for LockDetailsView {

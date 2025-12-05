@@ -3,7 +3,7 @@ import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useReconnect, useWaitForTransactionReceipt, useWriteContract } from 'wagmi';
-import { base, anvil } from 'wagmi/chains';
+import { base } from 'wagmi/chains';
 import { concatHex, keccak256, parseEther, stringToBytes } from 'viem';
 import './App.css';
 import { useBindAndLockStore } from './store/lock_and_bind';
@@ -45,7 +45,6 @@ const steps: StepConfig[] = [
 
 const TOKEN_REGISTRY_ADDRESSES: Record<number, `0x${string}`> = {
   [base.id]: '0x0000000000e8d224B902632757d5dbc51a451456',
-  [anvil.id]: '0x0000000000e8d224B902632757d5dbc51a451456',
 };
 
 const tokenRegistryAbi = [
@@ -100,9 +99,8 @@ const MAX_LOCK_DURATION_SECONDS = 4 * 52 * 7 * 24 * 60 * 60; // ~4 years
 const ZERO_NAMEHASH = '0x0000000000000000000000000000000000000000000000000000000000000000' as const;
 const CHAIN_LABELS: Record<number, string> = {
   [base.id]: 'Base',
-  [anvil.id]: 'Anvil',
 };
-const FALLBACK_CHAIN_ID = anvil.id;
+const FALLBACK_CHAIN_ID = base.id;
 
 const SECONDS_PER_MINUTE = 60;
 const SECONDS_PER_HOUR = 60 * SECONDS_PER_MINUTE;
@@ -441,6 +439,13 @@ function App() {
   useEffect(() => {
     initialize();
   }, [initialize]);
+
+  // Kick off a fetch as soon as wallet address is known.
+  useEffect(() => {
+    if (isWalletConnected && address) {
+      void fetchLockStatus(address);
+    }
+  }, [isWalletConnected, address, fetchLockStatus]);
 
   useEffect(() => {
     const reconnectOnResume = () => {

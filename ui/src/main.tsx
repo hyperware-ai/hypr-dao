@@ -8,22 +8,15 @@ import '@rainbow-me/rainbowkit/styles.css';
 import { Buffer } from 'buffer';
 import { WagmiProvider, http } from 'wagmi';
 import { RainbowKitProvider, getDefaultConfig } from '@rainbow-me/rainbowkit';
-import { base, anvil } from 'wagmi/chains';
+import { base } from 'wagmi/chains';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 if (!(window as { Buffer?: typeof Buffer }).Buffer) {
   (window as { Buffer?: typeof Buffer }).Buffer = Buffer;
 }
 
-const simulationMode =
-  import.meta.env.VITE_SIMULATION_MODE === 'true' || import.meta.env.MODE === 'development';
-// Also allow anvil when running locally so simulation builds can switch networks.
-const allowAnvil = simulationMode || window.location.hostname === 'localhost';
-const chains = [base, ...(allowAnvil ? ([anvil] as const) : [])] as const;
-const transports = chains.reduce<Record<number, ReturnType<typeof http>>>((acc, chain) => {
-  acc[chain.id] = http();
-  return acc;
-}, {});
+const chains = [base] as const;
+const transports = { [base.id]: http() } as const;
 
 const wagmiConfig = getDefaultConfig({
   appName: 'Lock & Bind',
