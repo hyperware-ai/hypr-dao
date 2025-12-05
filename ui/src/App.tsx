@@ -403,7 +403,6 @@ function App() {
   }, []);
   const {
     nodeId,
-    isConnected,
     ownerAddress,
     lockDetails,
     hyprOwned,
@@ -417,7 +416,7 @@ function App() {
     error,
     initialize,
     fetchLockStatus,
-    refreshLockStatus,
+    refreshLockStatus: refreshLockStatusRaw,
     clearError,
     minLockDurationSeconds: minLockDurationSecondsRaw,
   } = useBindAndLockStore();
@@ -496,10 +495,24 @@ function App() {
     };
   }, [isWalletConnected, reconnect]);
 
+  const walletConnected = Boolean(isWalletConnected && address);
+
+  const fetchLockStatusForWallet = useCallback(async () => {
+    if (walletConnected && address) {
+      await fetchLockStatus(address);
+    }
+  }, [walletConnected, address, fetchLockStatus]);
+
+  const refreshLockStatusForWallet = useCallback(async () => {
+    if (walletConnected && address) {
+      await refreshLockStatusRaw(address);
+    }
+  }, [walletConnected, address, refreshLockStatusRaw]);
+
   useEffect(() => {
     const refreshOnResume = () => {
       if (document.visibilityState === 'visible') {
-        void refreshLockStatus();
+        void refreshLockStatusForWallet();
       }
     };
     window.addEventListener('focus', refreshOnResume);
@@ -508,22 +521,14 @@ function App() {
       window.removeEventListener('focus', refreshOnResume);
       document.removeEventListener('visibilitychange', refreshOnResume);
     };
-  }, [refreshLockStatus]);
+  }, [refreshLockStatusForWallet]);
 
-  const walletConnected = Boolean(isWalletConnected && address);
-  const normalizedOwnerAddress = ownerAddress?.toLowerCase() ?? null;
-  const normalizedWalletAddress = address?.toLowerCase() ?? null;
-  const walletMismatch =
-    walletConnected &&
-    Boolean(normalizedOwnerAddress) &&
-    Boolean(normalizedWalletAddress) &&
-    normalizedOwnerAddress !== normalizedWalletAddress;
   const expectedChainId = useBindAndLockStore((state) => state.chainId) ?? FALLBACK_CHAIN_ID;
   const expectedChainName = CHAIN_LABELS[expectedChainId] ?? `Chain ${expectedChainId}`;
   const networkMismatch =
     walletConnected && chain?.id !== undefined && chain.id !== expectedChainId;
-  const environmentReady = !walletMismatch && !networkMismatch;
-  const connectComplete = Boolean(isConnected && nodeId && walletConnected);
+  const environmentReady = !networkMismatch;
+  const connectComplete = Boolean(walletConnected && environmentReady);
   const hyprOwnedWei = hyprOwned?.amount_raw_wei ? BigInt(hyprOwned.amount_raw_wei) : 0n;
   const lockedWei = lockDetails?.amount_raw_wei ? BigInt(lockDetails.amount_raw_wei) : 0n;
   const hasBalanceData = hyprOwned !== null;
@@ -558,18 +563,18 @@ function App() {
 
   useEffect(() => {
     if (connectComplete) {
-      void fetchLockStatus();
+      void fetchLockStatusForWallet();
     }
-  }, [connectComplete, fetchLockStatus]);
+  }, [connectComplete, fetchLockStatusForWallet]);
 
   useEffect(() => {
     const id = setInterval(() => {
       if (connectComplete && environmentReady) {
-        void refreshLockStatus();
+        void refreshLockStatusForWallet();
       }
     }, 20_000);
     return () => clearInterval(id);
-  }, [connectComplete, environmentReady, refreshLockStatus]);
+  }, [connectComplete, environmentReady, refreshLockStatusForWallet]);
 
   const canAccessStep = (id: StepId) => {
     if (id === 'lock') {
@@ -612,13 +617,7 @@ function App() {
 
             {connectComplete && !environmentReady && (
               <div className="warning-card">
-                <h3>Connection is required</h3>
-                {walletMismatch && (
-                  <p>
-                    Connect wallet <code>{ownerAddress}</code> to manage this node owner's HYPR locks and bindings. You are currently
-                    connected as <code>{address}</code>.
-                  </p>
-                )}
+                <h3>Connection required</h3>
                 {networkMismatch && (
                   <p>
                     Switch THE wallet network to {expectedChainName} (chain ID {expectedChainId}) to continue. You are on{' '}
@@ -647,7 +646,7 @@ function App() {
                       type="button"
                       className="refresh-inline-button"
                       disabled={isLoading}
-                      onClick={refreshLockStatus}
+                      onClick={refreshLockStatusForWallet}
                     >
                       {isLoading ? <span className="spinner" /> : 'Refresh values'}
                     </button>
@@ -680,7 +679,7 @@ function App() {
                           hyprTokenAddress={hyprTokenAddress}
                           lastError={lastError}
                           isLoading={isLoading}
-                          refreshLockStatus={refreshLockStatus}
+                          refreshLockStatus={refreshLockStatusForWallet}
                           walletConnected={walletConnected}
                           walletAddress={address}
                           targetRegistryAddress={targetRegistryAddress}
@@ -699,7 +698,7 @@ function App() {
                           availableToBind={availableToBind}
                           lockDetails={lockDetails}
                           bindings={bindings}
-                          refreshLockStatus={refreshLockStatus}
+                          refreshLockStatus={refreshLockStatusForWallet}
                           minLockDurationSeconds={minLockDurationSeconds}
                           lockUpdateNonce={lockUpdateNonce}
                           isMobile={isMobile}

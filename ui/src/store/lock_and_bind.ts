@@ -2,12 +2,18 @@
 import { create } from 'zustand';
 import type { LockAndBindState, LockStatusPayload } from '../types/lock_and_bind';
 import { getNodeId } from '../types/global';
-import { HyprDao } from '#caller-utils';
+import { HyprDao, parseResponse } from '#caller-utils';
+
+// Some hosted environments serve the process under a path prefix, e.g. /hypr-dao:hypr-dao:ware.hypr.
+const API_PREFIX =
+  typeof window !== 'undefined' && window.location.pathname.includes('hypr-dao:hypr-dao:ware.hypr')
+    ? '/hypr-dao:hypr-dao:ware.hypr'
+    : '';
 
 interface LockAndBindStore extends LockAndBindState {
   initialize: () => void;
-  fetchLockStatus: () => Promise<void>;
-  refreshLockStatus: () => Promise<void>;
+  fetchLockStatus: (address: string) => Promise<void>;
+  refreshLockStatus: (address: string) => Promise<void>;
   setError: (error: string | null) => void;
   clearError: () => void;
   acknowledgeLockModal: () => Promise<void>;
@@ -33,21 +39,17 @@ export const useBindAndLockStore = create<LockAndBindStore>((set, get) => ({
   lockModalSeen: false,
 
   initialize: () => {
-    const nodeId = getNodeId();
+    const nodeId = getNodeId() ?? 'web';
     set({
       nodeId,
-      isConnected: nodeId !== null,
+      isConnected: true,
     });
-    
-    if (nodeId) {
-      get().fetchLockStatus();
-    }
   },
 
-  fetchLockStatus: async () => {
+  fetchLockStatus: async (address: string) => {
     set({ isLoading: true, error: null });
     try {
-      const status = await HyprDao.get_lock_status();
+      const status = await getLockStatusFor(address);
       applyStatus(status, set);
     } catch (error) {
       set({
@@ -57,11 +59,11 @@ export const useBindAndLockStore = create<LockAndBindStore>((set, get) => ({
     }
   },
 
-  refreshLockStatus: async () => {
+  refreshLockStatus: async (address: string) => {
     // Keep refresh silent to avoid UI jitter on periodic polls
     set({ error: null });
     try {
-      const status = await HyprDao.refresh_lock_status();
+      const status = await refreshLockStatusFor(address);
       applyStatus(status, set);
     } catch (error) {
       set({
@@ -86,9 +88,35 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'An unknown error occurred';
 }
 
+async function getLockStatusFor(address: string): Promise<LockStatusPayload> {
+  const response = await fetch(`${API_PREFIX}/api/get-lock-status-for`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ GetLockStatusFor: address }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to get lock status (status ${response.status})`);
+  }
+  const json = await response.json();
+  return parseResponse<LockStatusPayload>(json);
+}
+
+async function refreshLockStatusFor(address: string): Promise<LockStatusPayload> {
+  const response = await fetch(`${API_PREFIX}/api/refresh-lock-status-for`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ RefreshLockStatusFor: address }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to refresh lock status (status ${response.status})`);
+  }
+  const json = await response.json();
+  return parseResponse<LockStatusPayload>(json);
+}
+
 function applyStatus(status: LockStatusPayload, set: (updater: Partial<LockAndBindState>) => void) {
   set({
-    nodeId: status.node_id,
+    nodeId: status.node_id || 'web',
     ownerAddress: status.owner_address,
     lockDetails: status.lock_details,
     hyprOwned: status.hypr_owned,
