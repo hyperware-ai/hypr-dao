@@ -96,6 +96,26 @@ input:focus, textarea:focus {
   border-color: var(--primary-color);
 }
 
+select {
+  padding: 0.6em;
+  font-size: 1em;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background-color: var(--surface);
+  color: var(--text-primary);
+  font-family: inherit;
+}
+
+select option {
+  background-color: var(--surface);
+  color: var(--text-primary);
+}
+
+select:focus {
+  outline: none;
+  border-color: var(--primary-color);
+}
+
 /* Utility classes */
 .error {
   color: var(--error-color);
@@ -125,12 +145,29 @@ input:focus, textarea:focus {
     --surface: #f5f5f5;
     --text-primary: #213547;
     --text-secondary: #646464;
-    --border-color: rgba(0, 0, 0, 0.1);
+    --text-tertiary: rgba(0, 0, 0, 0.4);
+    --border-color: rgba(0, 0, 0, 0.15);
     color: var(--text-primary);
     background-color: var(--background);
   }
-  
+
   button {
     background-color: #f9f9f9;
+    color: var(--text-primary);
+  }
+
+  select {
+    background-color: var(--surface);
+    color: var(--text-primary);
+  }
+
+  select option {
+    background-color: #ffffff;
+    color: var(--text-primary);
+  }
+
+  input, textarea {
+    background-color: #ffffff;
+    color: var(--text-primary);
   }
 }
