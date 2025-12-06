@@ -12,9 +12,9 @@ import { HyprDao as CallerApp } from '#caller-utils';
 
 const simulationMode = import.meta.env.VITE_SIMULATION_MODE === 'true';
 
-type StepId = 'lock' | 'bind';
+type StepId = 'approve' | 'lock' | 'bind';
 type StepIcon = 'check' | 'lock' | 'chain';
-type LockView = 'details' | 'manage' | 'extend' | 'approve';
+type LockView = 'details' | 'manage' | 'extend';
 
 interface StepConfig {
   id: StepId;
@@ -29,6 +29,12 @@ interface BannerMessage {
 }
 
 const steps: StepConfig[] = [
+  {
+    id: 'approve',
+    title: 'Approve',
+    description: '',
+    icon: 'check',
+  },
   {
     id: 'lock',
     title: 'Lock',
@@ -394,7 +400,7 @@ const calculateRequiredAdditionalDuration = (
 };
 
 function App() {
-  const [activeStep, setActiveStep] = useState<StepId>('lock');
+  const [activeStep, setActiveStep] = useState<StepId>('approve');
   const [lockUpdateNonce, setLockUpdateNonce] = useState(0);
   const [hasBoundAnything, setHasBoundAnything] = useState(() =>
     localStorage.getItem('hypr-dao-has-bound') === 'true'
@@ -441,6 +447,19 @@ function App() {
   const reconnectIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const wasConnectedRef = useRef(isWalletConnected);
+
+  // Lock button animation state (for bottom tabs)
+  const [showLockPopAnimation, setShowLockPopAnimation] = useState(false);
+  const [showLockShimmer, setShowLockShimmer] = useState(false);
+  const lockShimmerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const prevLockApproved = useRef(false);
+
+  // Bind tab animation state (for bottom tabs)
+  const [showBindTabPopAnimation, setShowBindTabPopAnimation] = useState(false);
+  const [showBindTabShimmer, setShowBindTabShimmer] = useState(false);
+  const bindTabShimmerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const prevHasLock = useRef(false);
+
   const targetRegistryAddress = useMemo(() => {
     if (chain?.id && TOKEN_REGISTRY_ADDRESSES[chain.id]) {
       return TOKEN_REGISTRY_ADDRESSES[chain.id];
@@ -565,6 +584,10 @@ function App() {
   const lockedWei = lockDetails?.amount_raw_wei ? BigInt(lockDetails.amount_raw_wei) : 0n;
   const hasBalanceData = hyprOwned !== null;
   const hasHyprHoldings = hyprOwnedWei > 0n || lockedWei > 0n;
+  const lockAllowanceWei = tokeregistryAllowance?.amount_raw_wei
+    ? BigInt(tokeregistryAllowance.amount_raw_wei)
+    : 0n;
+  const isApproved = lockAllowanceWei > 0n;
   const showHyprRequiredNotice =
     walletConnected &&
     connectComplete &&
@@ -573,6 +596,7 @@ function App() {
     !hasHyprHoldings;
   // Always show content for browsing
   const showContent = true;
+  const approveTabEnabled = true;
   const lockTabEnabled = true;
   const bindTabEnabled = true;
 
@@ -608,6 +632,9 @@ function App() {
   }, [connectComplete, environmentReady, refreshLockStatusForWallet]);
 
   const canAccessStep = (id: StepId) => {
+    if (id === 'approve') {
+      return approveTabEnabled;
+    }
     if (id === 'lock') {
       return lockTabEnabled;
     }
@@ -617,6 +644,113 @@ function App() {
     return false;
   };
 
+  // Visual grayed state for Lock & Bind based on approval/lock status
+  const hasExistingLockApp = lockedWei > 0n;
+
+  const isStepGrayed = (id: StepId) => {
+    // Gray ALL tabs when wallet not connected
+    if (!walletConnected) {
+      return true;
+    }
+    // When user has a lock, nothing is grayed
+    if (hasExistingLockApp) {
+      return false;
+    }
+    if (id === 'lock') {
+      // Lock is gray only when not approved
+      return !isApproved && hasHyprHoldings;
+    }
+    if (id === 'bind') {
+      // Bind is gray until user has a lock
+      return hasHyprHoldings;
+    }
+    return false;
+  };
+
+  // Lock button pop & shine animation when approval happens
+  useEffect(() => {
+    const shouldAnimate = walletConnected && isApproved && !hasExistingLockApp;
+
+    if (shouldAnimate && !prevLockApproved.current) {
+      // Just approved - trigger pop animation
+      setShowLockPopAnimation(true);
+
+      // Start shimmer after 3s, repeat every 5-10s
+      const timeout = setTimeout(() => {
+        setShowLockShimmer(true);
+        setTimeout(() => setShowLockShimmer(false), 800);
+
+        lockShimmerIntervalRef.current = setInterval(() => {
+          setShowLockShimmer(true);
+          setTimeout(() => setShowLockShimmer(false), 800);
+        }, 5000 + Math.random() * 5000);
+      }, 3000);
+
+      return () => clearTimeout(timeout);
+    }
+
+    if (!shouldAnimate) {
+      setShowLockPopAnimation(false);
+      setShowLockShimmer(false);
+      if (lockShimmerIntervalRef.current) {
+        clearInterval(lockShimmerIntervalRef.current);
+        lockShimmerIntervalRef.current = null;
+      }
+    }
+
+    prevLockApproved.current = isApproved;
+  }, [walletConnected, isApproved, hasExistingLockApp]);
+
+  // Cleanup shimmer interval on unmount
+  useEffect(() => {
+    return () => {
+      if (lockShimmerIntervalRef.current) clearInterval(lockShimmerIntervalRef.current);
+    };
+  }, []);
+
+  // Bind tab animation - shine when have lock but no bindings
+  useEffect(() => {
+    const hasLock = lockedWei > 0n;
+    const hasBindings = bindings.length > 0;
+    const shouldAnimate = walletConnected && hasLock && !hasBindings;
+
+    if (shouldAnimate && !prevHasLock.current) {
+      // Just got a lock - trigger pop animation
+      setShowBindTabPopAnimation(true);
+
+      // Start shimmer after 3s, repeat every 5-10s
+      const timeout = setTimeout(() => {
+        setShowBindTabShimmer(true);
+        setTimeout(() => setShowBindTabShimmer(false), 800);
+
+        bindTabShimmerIntervalRef.current = setInterval(() => {
+          setShowBindTabShimmer(true);
+          setTimeout(() => setShowBindTabShimmer(false), 800);
+        }, 5000 + Math.random() * 5000);
+      }, 3000);
+
+      return () => clearTimeout(timeout);
+    }
+
+    if (!shouldAnimate) {
+      setShowBindTabPopAnimation(false);
+      setShowBindTabShimmer(false);
+      if (bindTabShimmerIntervalRef.current) {
+        clearInterval(bindTabShimmerIntervalRef.current);
+        bindTabShimmerIntervalRef.current = null;
+      }
+    }
+
+    prevHasLock.current = hasLock;
+  }, [walletConnected, lockedWei, bindings.length]);
+
+  // Cleanup Bind tab shimmer interval on unmount
+  useEffect(() => {
+    return () => {
+      if (bindTabShimmerIntervalRef.current) clearInterval(bindTabShimmerIntervalRef.current);
+    };
+  }, []);
+
   const handleSelectStep = (id: StepId) => {
     if (canAccessStep(id)) {
       setActiveStep(id);
@@ -624,11 +758,11 @@ function App() {
   };
 
   const stepDescription = useMemo(() => {
-    if (activeStep === 'lock' || activeStep === 'bind') return '';
+    if (activeStep === 'approve' || activeStep === 'lock' || activeStep === 'bind') return '';
     return steps.find((step) => step.id === activeStep)?.description ?? '';
   }, [activeStep]);
   const activeStepTitle = useMemo(() => {
-    if (activeStep === 'lock' || activeStep === 'bind') return '';
+    if (activeStep === 'approve' || activeStep === 'lock' || activeStep === 'bind') return '';
     return steps.find((step) => step.id === activeStep)?.title ?? '';
   }, [activeStep]);
 
@@ -704,6 +838,18 @@ function App() {
                     </div>
                   ) : (
                     <>
+                      {activeStep === 'approve' && (
+                        <ApproveStep
+                          walletConnected={walletConnected}
+                          walletAddress={address}
+                          hyprTokenAddress={hyprTokenAddress}
+                          hyprOwned={hyprOwned}
+                          lockAllowance={tokeregistryAllowance}
+                          targetRegistryAddress={targetRegistryAddress}
+                          refreshLockStatus={refreshLockStatusForWallet}
+                        />
+                      )}
+
                       {activeStep === 'lock' && (
                         <LockStep
                           connectComplete={connectComplete}
@@ -757,7 +903,12 @@ function App() {
             steps={steps}
             activeStep={activeStep}
             canAccessStep={canAccessStep}
+            isStepGrayed={isStepGrayed}
             onSelect={handleSelectStep}
+            lockPopAnimation={showLockPopAnimation}
+            lockShimmer={showLockShimmer}
+            bindPopAnimation={showBindTabPopAnimation}
+            bindShimmer={showBindTabShimmer}
           />
         </div>
       </div>
@@ -858,13 +1009,10 @@ const LockStep = ({
     if (userSetLockView) return;
     if (hasExistingLock && lockView !== 'details') {
       setLockView('details');
-    } else if (!hasExistingLock) {
-      const targetView = lockAvailableWei === 0n ? 'approve' : 'manage';
-      if (lockView !== targetView) {
-        setLockView(targetView);
-      }
+    } else if (!hasExistingLock && lockView !== 'manage') {
+      setLockView('manage');
     }
-  }, [hasExistingLock, lockAvailableWei, lockView, userSetLockView]);
+  }, [hasExistingLock, lockView, userSetLockView]);
 
   useEffect(() => {
     if (lockExpired && lockView !== 'details') {
@@ -902,7 +1050,6 @@ const LockStep = ({
     () => durationPartsToSeconds(durationParts),
     [durationParts],
   );
-  const hasAllowance = lockAllowance && lockAllowance.amount_raw_wei !== '0';
   const minDurationSecondsBigInt = BigInt(minLockDurationSeconds);
   const lockEndDateMin = useMemo(
     () => new Date((nowSeconds + minLockDurationSeconds) * 1000),
@@ -1260,28 +1407,6 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     };
   }, [isAllowanceConfirmed, pendingLock, manageTxHash, isManagePending, triggerLock]);
 
-  const handleResetApproval = async () => {
-    if (!walletConnected || !walletAddress) {
-      pushManageError('Connect a wallet to reset approvals.');
-      return;
-    }
-    if (!hyprTokenAddress) {
-      pushManageError('Unable to resolve HYPR token address.');
-      return;
-    }
-    try {
-      await writeApproveContract({
-        address: hyprTokenAddress as `0x${string}`,
-        abi: erc20ApproveAbi,
-        functionName: 'approve',
-        args: [targetRegistryAddress, 0n],
-      });
-      setPendingLock(null);
-    } catch (err) {
-      pushManageError(getErrorMessage(err));
-    }
-  };
-
   const submitLockRequest = async () => {
     setTxNotice(null);
     setManageError(null);
@@ -1424,60 +1549,6 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     setLockDurationDirty(true);
     setLockMobileDuration('');
     setShowLockCustomModal(false);
-  };
-
-  const handleApproveOnly = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!walletConnected || !walletAddress) {
-      pushManageError('Connect a wallet to approve.');
-      return;
-    }
-    if (!hyprTokenAddress) {
-      pushManageError('Unable to resolve HYPR token address.');
-      return;
-    }
-    if (!amountInput) {
-      pushManageError('Enter a HYPR amount.');
-      return;
-    }
-    const disallowZero = lockAvailableWei === 0n;
-    if (Number(amountInput) < 0 || (disallowZero && Number(amountInput) === 0)) {
-      pushManageError(disallowZero ? 'Enter a positive HYPR amount.' : 'Enter a non-negative HYPR amount.');
-      return;
-    }
-    const amountWei = (() => {
-      try {
-        return parseEther(amountInput);
-      } catch {
-        return 0n;
-      }
-    })();
-    if (amountWei < 0n || (disallowZero && amountWei === 0n)) {
-      pushManageError(disallowZero ? 'Enter a positive HYPR amount.' : 'Enter a valid HYPR amount.');
-      return;
-    }
-    if (amountWei > hyprOwnedWei) {
-      pushManageError('Amount exceeds HYPR available to approve.');
-      return;
-    }
-    try {
-      await writeApproveContract({
-        address: hyprTokenAddress as `0x${string}`,
-        abi: erc20ApproveAbi,
-        functionName: 'approve',
-        args: [targetRegistryAddress, amountWei],
-      });
-      if (hasExistingLock) {
-        setLockView('details');
-      } else if (amountWei > 0n) {
-        setAmountInput('');
-        setLockView('manage');
-      } else {
-        setLockView('approve');
-      }
-    } catch (err) {
-      pushManageError(getErrorMessage(err));
-    }
   };
 
   const lockHeaderSubtitle = 'Lock an amount of HYPR for a specified duration to use in bindings.';
@@ -1907,13 +1978,6 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     exceedsLockAvailable ||
     !hasValidEndDate ||
     durationLessThanExisting;
-  const approveButtonDisabled =
-    !walletConnected ||
-    isAllowancePending ||
-    isAllowanceConfirming ||
-    !amountProvided ||
-    (lockAvailableWei === 0n ? Number(amountInput) <= 0 : Number(amountInput) < 0) ||
-    additionalAmountWei > hyprOwnedWei;
   const showLockFormContent = isMobile
     ? amountProvided && amountValue > 0 && !exceedsLockAvailable
     : amountProvided &&
@@ -2012,7 +2076,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
   const handleShowApprovePanel = useCallback(() => {
     setUserSetLockView(true);
     setAmountInput('');
-    setLockView('approve');
+    setLockView('manage');
     resetLockEndDefaults();
   }, [resetLockEndDefaults]);
 
@@ -2025,24 +2089,6 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
 
   return (
     <section className="step-card lock-step">
-      {lockView === 'details' && hasAllowance && lockAllowance && (
-        <div className="lock-grid">
-          <div className="lock-card">
-            <div className="lock-card-label">Approved HYPR pending locking</div>
-            <div className="lock-card-value">{lockAllowance.amount_formatted_hypr}</div>
-            <button
-              type="button"
-              className="secondary-button"
-              disabled={isAllowancePending || isAllowanceConfirming}
-              onClick={handleResetApproval}
-              style={{ marginTop: '0.5rem', width: 'fit-content' }}
-            >
-              {isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Revoke approval'}
-            </button>
-          </div>
-        </div>
-      )}
-
       {lockView === 'details' && (
         <div className="lock-grid">
           {lockDetails && hasExistingLock ? (
@@ -2144,31 +2190,9 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
           <div className="input-grid">
             <label className="input-field">
               <span>
-                {hasExistingLock ? (
-                  hyprOwnedWei > lockAvailableWei ? (
-                    <>
-                      Amount to add (up to {maxAmountLabel} -- click{' '}
-                      <button type="button" className="link-button" onClick={handleShowApprovePanel}>
-                        here
-                      </button>{' '}
-                      to approve a higher limit)
-                    </>
-                  ) : (
-                    `Amount to add (up to ${maxAmountLabel})`
-                  )
-                ) : (
-                  <>
-                    Amount (up to {maxAmountLabel} -- click{' '}
-                    <button type="button" className="link-button" onClick={handleShowApprovePanel}>
-                      here
-                    </button>{' '}
-                    to{' '}
-                    {hyprOwnedWei > lockAvailableWei
-                      ? 'approve a higher limit'
-                      : 'approve a different limit'}
-                    )
-                  </>
-                )}
+                {hasExistingLock
+                  ? `Amount to add (approved up to ${maxAmountLabel})`
+                  : `Amount (approved up to ${maxAmountLabel})`}
               </span>
               <input
                 type="number"
@@ -2350,55 +2374,6 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
         </form>
       )}
 
-      {lockView === 'approve' && (
-        <form className="lock-form" onSubmit={handleApproveOnly}>
-          <div className="form-header">
-            <div className="form-header-text">
-              <h3>Approve HYPR for locking</h3>
-            </div>
-          </div>
-
-          <div className="input-grid">
-            <label className="input-field">
-              <span>
-                {lockAvailableWei > 0n
-                  ? `New approval limit ${hyprOwned ? `(up to ${hyprOwned.amount_formatted_hypr})` : '(HYPR)'}`
-                  : `Amount to approve ${hyprOwned ? `(up to ${hyprOwned.amount_formatted_hypr})` : '(HYPR)'}`}
-              </span>
-              <input
-                type="number"
-                min="0"
-                step="0.000000000000000001"
-                value={amountInput}
-                onChange={(event) => setAmountInput(event.target.value)}
-                required
-              />
-            </label>
-          </div>
-
-          <div className="form-actions">
-            <button type="submit" className="secondary-button" disabled={approveButtonDisabled}>
-              {isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Submit Approval'}
-            </button>
-            {hasExistingLock && (
-              <button type="button" className="secondary-button ghost" onClick={handleShowDetailsPanel}>
-                Cancel
-              </button>
-            )}
-          </div>
-          {manageError && (
-            <div className="inline-error" ref={manageErrorRef}>
-              {manageError.text}
-            </div>
-          )}
-          {manageSuccessHash && (
-            <div className="inline-success" ref={manageSuccessRef}>
-              Lock updated! Tx {shortHash(manageSuccessHash)}
-            </div>
-          )}
-        </form>
-      )}
-
       {lastError && <div className="inline-error">{lastError}</div>}
 
       {showLockCustomModal && (
@@ -2488,7 +2463,179 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
   );
 };
 
+interface ApproveStepProps {
+  walletConnected: boolean;
+  walletAddress?: `0x${string}`;
+  hyprTokenAddress: string | null;
+  hyprOwned: BalanceView | null;
+  lockAllowance: BalanceView | null;
+  targetRegistryAddress: `0x${string}`;
+  refreshLockStatus: () => Promise<void>;
+}
 
+const ApproveStep = ({
+  walletConnected,
+  walletAddress,
+  hyprTokenAddress,
+  hyprOwned,
+  lockAllowance,
+  targetRegistryAddress,
+  refreshLockStatus,
+}: ApproveStepProps) => {
+  const [amountInput, setAmountInput] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [successHash, setSuccessHash] = useState<`0x${string}` | null>(null);
+
+  const hyprOwnedWei = hyprOwned?.amount_raw_wei ? BigInt(hyprOwned.amount_raw_wei) : 0n;
+  const lockAvailableWei = lockAllowance?.amount_raw_wei ? BigInt(lockAllowance.amount_raw_wei) : 0n;
+  const amountProvided = amountInput !== '';
+
+  const {
+    data: allowanceTxHash,
+    error: allowanceWriteError,
+    isPending: isAllowancePending,
+    writeContract: writeApproveContract,
+    reset: resetAllowanceWrite,
+  } = useWriteContract();
+
+  const {
+    isLoading: isAllowanceConfirming,
+    isSuccess: isAllowanceConfirmed,
+  } = useWaitForTransactionReceipt({
+    hash: allowanceTxHash,
+  });
+
+  // Handle approval confirmation
+  useEffect(() => {
+    if (isAllowanceConfirmed && allowanceTxHash) {
+      setSuccessHash(allowanceTxHash);
+      setAmountInput('');
+      void refreshLockStatus();
+    }
+  }, [isAllowanceConfirmed, allowanceTxHash, refreshLockStatus]);
+
+  // Handle write errors
+  useEffect(() => {
+    if (allowanceWriteError) {
+      setError(allowanceWriteError.message || 'Approval failed');
+    }
+  }, [allowanceWriteError]);
+
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    setSuccessHash(null);
+    resetAllowanceWrite();
+
+    if (!walletConnected || !walletAddress) {
+      setError('Connect a wallet to approve.');
+      return;
+    }
+    if (!hyprTokenAddress) {
+      setError('Unable to resolve HYPR token address.');
+      return;
+    }
+    if (!amountInput) {
+      setError('Enter a HYPR amount.');
+      return;
+    }
+    if (Number(amountInput) <= 0) {
+      setError('Enter a positive HYPR amount.');
+      return;
+    }
+    const amountWei = (() => {
+      try {
+        return parseEther(amountInput);
+      } catch {
+        return 0n;
+      }
+    })();
+    if (amountWei <= 0n) {
+      setError('Enter a valid HYPR amount.');
+      return;
+    }
+    if (amountWei > hyprOwnedWei) {
+      setError('Amount exceeds HYPR balance.');
+      return;
+    }
+    try {
+      await writeApproveContract({
+        address: hyprTokenAddress as `0x${string}`,
+        abi: erc20ApproveAbi,
+        functionName: 'approve',
+        args: [targetRegistryAddress, amountWei],
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Approval failed');
+    }
+  };
+
+  const approveButtonDisabled =
+    !walletConnected ||
+    isAllowancePending ||
+    isAllowanceConfirming ||
+    !amountProvided ||
+    Number(amountInput) <= 0;
+
+  return (
+    <section className="step-panel approve-step">
+      <form className="lock-form" onSubmit={handleSubmit}>
+        <div className="form-header">
+          <div className="form-header-text">
+            <h3>Approve HYPR for locking</h3>
+            <p className="form-subtitle">
+              Approve an amount of HYPR to be used for locking.
+            </p>
+          </div>
+        </div>
+
+        {lockAvailableWei > 0n && (
+          <div className="approve-status">
+            <span className="status-label">Current approval:</span>
+            <span className="status-value">{lockAllowance?.amount_formatted_hypr ?? '0'} HYPR</span>
+          </div>
+        )}
+
+        <div className="input-grid">
+          <label className="input-field">
+            <span>
+              {lockAvailableWei > 0n
+                ? `New approval amount ${hyprOwned ? `(up to ${hyprOwned.amount_formatted_hypr})` : '(HYPR)'}`
+                : `Amount to approve ${hyprOwned ? `(up to ${hyprOwned.amount_formatted_hypr})` : '(HYPR)'}`}
+            </span>
+            <input
+              type="number"
+              min="0"
+              step="0.000000000000000001"
+              value={amountInput}
+              onChange={(event) => setAmountInput(event.target.value)}
+              placeholder="0.0"
+              required
+              disabled={!walletConnected}
+            />
+          </label>
+        </div>
+
+        <div className="form-actions">
+          <button type="submit" className="secondary-button" disabled={approveButtonDisabled}>
+            {isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Submit Approval'}
+          </button>
+        </div>
+
+        {error && (
+          <div className="inline-error">
+            {error}
+          </div>
+        )}
+        {successHash && (
+          <div className="inline-success">
+            Approval confirmed! Tx {successHash.slice(0, 6)}...{successHash.slice(-4)}
+          </div>
+        )}
+      </form>
+    </section>
+  );
+};
 
 interface BindStepProps {
   connectComplete: boolean;
@@ -3761,20 +3908,42 @@ interface BottomTabsProps {
   steps: StepConfig[];
   activeStep: StepId;
   canAccessStep: (id: StepId) => boolean;
+  isStepGrayed: (id: StepId) => boolean;
   onSelect: (id: StepId) => void;
+  lockPopAnimation: boolean;
+  lockShimmer: boolean;
+  bindPopAnimation: boolean;
+  bindShimmer: boolean;
 }
 
-const BottomTabs = ({ steps, activeStep, canAccessStep, onSelect }: BottomTabsProps) => (
+const BottomTabs = ({
+  steps,
+  activeStep,
+  canAccessStep,
+  isStepGrayed,
+  onSelect,
+  lockPopAnimation,
+  lockShimmer,
+  bindPopAnimation,
+  bindShimmer,
+}: BottomTabsProps) => (
   <nav className="bottom-tabs">
-    {steps.map((step, index) => {
+    {steps.map((step) => {
       const accessible = canAccessStep(step.id);
+      const grayed = isStepGrayed(step.id);
       const isActive = activeStep === step.id;
       const icon = iconGlyph[step.icon];
+      let animClass = '';
+      if (step.id === 'lock') {
+        animClass = `${lockPopAnimation ? ' bind-button-pop' : ''}${lockShimmer ? ' bind-button-shimmer' : ''}`;
+      } else if (step.id === 'bind') {
+        animClass = `${bindPopAnimation ? ' bind-button-pop' : ''}${bindShimmer ? ' bind-button-shimmer' : ''}`;
+      }
       return (
         <button
           type="button"
           key={step.id}
-          className={`bottom-tab tab-${step.id}${isActive ? ' active' : ''}`}
+          className={`bottom-tab tab-${step.id}${isActive ? ' active' : ''}${grayed ? ' grayed' : ''}${animClass}`}
           disabled={!accessible}
           onClick={() => onSelect(step.id)}
         >

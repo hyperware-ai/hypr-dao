@@ -503,6 +503,7 @@
   font-size: 0.9rem;
 }
 
+.bottom-tab.tab-approve.active .tab-title,
 .bottom-tab.tab-lock.active .tab-title,
 .bottom-tab.tab-bind.active .tab-title {
   font-weight: 750;
@@ -518,6 +519,37 @@
 .bottom-tab:disabled .tab-icon {
   filter: grayscale(1);
   opacity: 0.4;
+}
+
+/* Grayed tabs (not approved yet) - clickable but visually muted */
+.bottom-tab.grayed {
+  opacity: 0.5;
+  filter: grayscale(0.7);
+}
+
+.bottom-tab.grayed .tab-icon {
+  filter: grayscale(1);
+}
+
+/* Approve step status display */
+.approve-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background: rgba(100, 108, 255, 0.1);
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+.approve-status .status-label {
+  color: var(--text-secondary);
+}
+
+.approve-status .status-value {
+  font-weight: 600;
+  color: var(--primary-color);
 }
 
 .spinner {
