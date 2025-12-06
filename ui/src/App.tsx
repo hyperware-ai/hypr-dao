@@ -396,8 +396,15 @@ const calculateRequiredAdditionalDuration = (
 function App() {
   const [activeStep, setActiveStep] = useState<StepId>('lock');
   const [lockUpdateNonce, setLockUpdateNonce] = useState(0);
+  const [hasBoundAnything, setHasBoundAnything] = useState(() =>
+    localStorage.getItem('hypr-dao-has-bound') === 'true'
+  );
   const handleLockUpdated = useCallback(() => {
     setLockUpdateNonce((prev) => prev + 1);
+  }, []);
+  const markHasBound = useCallback(() => {
+    setHasBoundAnything(true);
+    localStorage.setItem('hypr-dao-has-bound', 'true');
   }, []);
   const {
     nodeId,
@@ -414,12 +421,16 @@ function App() {
     error,
     initialize,
     fetchLockStatus,
+    fetchBaseLockStatus,
     refreshLockStatus: refreshLockStatusRaw,
+    resetWalletState,
     clearError,
     minLockDurationSeconds: minLockDurationSecondsRaw,
   } = useBindAndLockStore();
+  const [initLoadTimeout, setInitLoadTimeout] = useState(false);
+  const MIN_LOCK_DURATION_FALLBACK = 600; // 10 minutes - safe default
   const minLockDurationReady = minLockDurationSecondsRaw !== null;
-  const minLockDurationSeconds = minLockDurationSecondsRaw!;
+  const minLockDurationSeconds = minLockDurationSecondsRaw ?? MIN_LOCK_DURATION_FALLBACK;
   const isMobile = useIsMobile();
   const lockExpired =
     lockDetails !== null &&
@@ -429,6 +440,7 @@ function App() {
   const { reconnect } = useReconnect();
   const reconnectIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectAttemptsRef = useRef(0);
+  const wasConnectedRef = useRef(isWalletConnected);
   const targetRegistryAddress = useMemo(() => {
     if (chain?.id && TOKEN_REGISTRY_ADDRESSES[chain.id]) {
       return TOKEN_REGISTRY_ADDRESSES[chain.id];
@@ -438,7 +450,22 @@ function App() {
 
   useEffect(() => {
     initialize();
-  }, [initialize]);
+    void fetchBaseLockStatus();
+  }, [initialize, fetchBaseLockStatus]);
+
+  // Timeout fallback for loading state
+  useEffect(() => {
+    const timer = setTimeout(() => setInitLoadTimeout(true), 3000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Reset wallet-specific state when transitioning from connected to disconnected
+  useEffect(() => {
+    if (wasConnectedRef.current && !isWalletConnected) {
+      resetWalletState();
+    }
+    wasConnectedRef.current = isWalletConnected;
+  }, [isWalletConnected, resetWalletState]);
 
   // Kick off a fetch as soon as wallet address is known.
   useEffect(() => {
@@ -544,11 +571,10 @@ function App() {
     environmentReady &&
     hasBalanceData &&
     !hasHyprHoldings;
-  const showContent = connectComplete && !showHyprRequiredNotice && environmentReady;
-  const lockTabEnabled = showContent;
-  const bindTabEnabled =
-    showContent &&
-    ((availableToBind && availableToBind.amount_raw_wei !== '0') || bindings.length > 0);
+  // Always show content for browsing
+  const showContent = true;
+  const lockTabEnabled = true;
+  const bindTabEnabled = true;
 
   useEffect(() => {
     if (lockExpired && activeStep !== 'lock') {
@@ -607,16 +633,23 @@ function App() {
   }, [activeStep]);
 
   return (
-    <div className="app">
+    <div className={`app${!walletConnected ? ' disconnected' : ''}`}>
       <div className="phone-shell">
         <div className="phone-frame">
-          <TopStatusBar />
+          <TopStatusBar walletConnected={walletConnected} />
 
           <div className="phone-body">
+            {!walletConnected && (
+              <div className="hypr-required-card">
+                <h3>Wallet required</h3>
+                <p>Connect wallet to use app.</p>
+              </div>
+            )}
+
             {showHyprRequiredNotice && (
               <div className="hypr-required-card">
                 <h3>HYPR required</h3>
-                <p>This account must possess a HYPR balance to use this application.</p>
+                <p>Add HYPR to wallet to use app.</p>
               </div>
             )}
 
@@ -660,7 +693,7 @@ function App() {
                 </div>
 
                 <main className="step-content">
-                  {!minLockDurationReady ? (
+                  {!minLockDurationReady && !initLoadTimeout ? (
                     <div className="lock-grid">
                       <div className="lock-card">
                         <span className="lock-card-label">Loading lock rules…</span>
@@ -707,23 +740,15 @@ function App() {
                           minLockDurationSeconds={minLockDurationSeconds}
                           lockUpdateNonce={lockUpdateNonce}
                           isMobile={isMobile}
+                          activeStep={activeStep}
+                          hasBoundAnything={hasBoundAnything}
+                          onBindSuccess={markHasBound}
                         />
                       )}
                     </>
                   )}
                 </main>
               </>
-            )}
-
-            {!showContent && (
-              <div className="body-placeholder">
-                <div className="lock-card">
-                  <span className="lock-card-label">Connect required</span>
-                  <span className="lock-card-value">
-                    Please connect your wallet
-                  </span>
-                </div>
-              </div>
             )}
 
           </div>
@@ -1454,21 +1479,6 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
       pushManageError(getErrorMessage(err));
     }
   };
-
-  if (!connectComplete) {
-    return (
-      <section className="step-card lock-step">
-        <div className="lock-grid">
-          <div className="lock-card">
-            <span className="lock-card-label">Connect required</span>
-            <span className="lock-card-value">
-              Please connect your wallet
-            </span>
-          </div>
-        </div>
-      </section>
-    );
-  }
 
   const lockHeaderSubtitle = 'Lock an amount of HYPR for a specified duration to use in bindings.';
   const allowZeroAmount = lockView === 'extend';
@@ -2492,6 +2502,9 @@ interface BindStepProps {
   minLockDurationSeconds: number;
   lockUpdateNonce: number;
   isMobile: boolean;
+  activeStep: StepId;
+  hasBoundAnything: boolean;
+  onBindSuccess: () => void;
 }
 
 const BindStep = ({
@@ -2506,6 +2519,9 @@ const BindStep = ({
   minLockDurationSeconds,
   lockUpdateNonce,
   isMobile,
+  activeStep,
+  hasBoundAnything,
+  onBindSuccess,
 }: BindStepProps) => {
   const [dstNameInput, setDstNameInput] = useState('');
   const [transferAmountInput, setTransferAmountInput] = useState('');
@@ -2543,6 +2559,13 @@ const BindStep = ({
   const transferSuccessRef = useRef<HTMLDivElement | null>(null);
   const lastTransferSyncedSeconds = useRef<number | null>(null);
   const [reclaimingNamehash, setReclaimingNamehash] = useState<string | null>(null);
+
+  // Animation state for Bind button
+  const [showBindPopAnimation, setShowBindPopAnimation] = useState(false);
+  const [showBindShimmer, setShowBindShimmer] = useState(false);
+  const bindShimmerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const prevBindButtonEnabled = useRef(false);
+
   const applyTransferMobileDuration = useCallback(
     (seconds: number) => {
       const next = new Date(Date.now() + seconds * 1000);
@@ -2971,8 +2994,10 @@ const BindStep = ({
     isMobile,
     shouldShowTransferEndInputs,
   ]);
+  const hasActiveLock = lockDetails && BigInt(lockDetails.amount_raw_wei) > 0n;
   const bindButtonDisabled =
     !walletConnected ||
+    !hasActiveLock ||
     isTransferPending ||
     isTransferConfirming ||
     (!hasTransferValidEndDate && bindView !== 'add-hypr') ||
@@ -2981,6 +3006,58 @@ const BindStep = ({
     transferExceedsAvailable ||
     (transferAmountValue <= 0 && bindView !== 'extend' && bindView !== 'add-hypr') ||
     dstNameInput.trim().length === 0;
+
+  // Animation logic: show pop and shimmer when Bind button becomes ready
+  const shouldAnimateBindButton = walletConnected && !!hasActiveLock && activeStep === 'lock' && !hasBoundAnything;
+
+  useEffect(() => {
+    const nowEnabled = !bindButtonDisabled && shouldAnimateBindButton;
+
+    if (nowEnabled && !prevBindButtonEnabled.current) {
+      // Button just became enabled - trigger pop animation
+      setShowBindPopAnimation(true);
+
+      // Start shimmer after 3s, repeat every 5-10s
+      const timeout = setTimeout(() => {
+        setShowBindShimmer(true);
+        setTimeout(() => setShowBindShimmer(false), 800);
+
+        bindShimmerIntervalRef.current = setInterval(() => {
+          setShowBindShimmer(true);
+          setTimeout(() => setShowBindShimmer(false), 800);
+        }, 5000 + Math.random() * 5000);
+      }, 3000);
+
+      return () => clearTimeout(timeout);
+    }
+
+    if (!nowEnabled) {
+      setShowBindPopAnimation(false);
+      setShowBindShimmer(false);
+      if (bindShimmerIntervalRef.current) {
+        clearInterval(bindShimmerIntervalRef.current);
+        bindShimmerIntervalRef.current = null;
+      }
+    }
+
+    prevBindButtonEnabled.current = nowEnabled;
+  }, [bindButtonDisabled, shouldAnimateBindButton]);
+
+  // Cleanup shimmer interval on unmount
+  useEffect(() => {
+    return () => {
+      if (bindShimmerIntervalRef.current) clearInterval(bindShimmerIntervalRef.current);
+    };
+  }, []);
+
+  const stopBindAnimations = useCallback(() => {
+    setShowBindPopAnimation(false);
+    setShowBindShimmer(false);
+    if (bindShimmerIntervalRef.current) {
+      clearInterval(bindShimmerIntervalRef.current);
+      bindShimmerIntervalRef.current = null;
+    }
+  }, []);
 
   const pushTransferError = (message: string) => {
     transferErrorIdRef.current += 1;
@@ -3069,8 +3146,9 @@ const BindStep = ({
       void refreshLockStatus();
       setUserSetBindView(false);
       setBindView('details');
+      onBindSuccess();
     }
-  }, [isTransferConfirmed, refreshLockStatus, minLockDurationSeconds, transferEndDateMin]);
+  }, [isTransferConfirmed, refreshLockStatus, minLockDurationSeconds, transferEndDateMin, onBindSuccess]);
 
   useEffect(() => {
     if (transferReceipt) {
@@ -3092,10 +3170,6 @@ const BindStep = ({
       return () => clearTimeout(timeout);
     }
   }, [transferSuccessHash]);
-
-  if (!connectComplete) {
-    return <></>;
-  }
 
   const handleTransfer = async (event: FormEvent) => {
     event.preventDefault();
@@ -3538,19 +3612,24 @@ const BindStep = ({
           />
         ))}
       <div className="form-actions">
-        <button type="submit" className="secondary-button" disabled={bindButtonDisabled}>
-              {isTransferPending || isTransferConfirming ? (
-                <span className="spinner" />
-              ) : bindView === 'extend' ? (
-                'Update binding'
-              ) : bindView === 'add' ? (
-                'Create binding'
-              ) : bindView === 'add-hypr' ? (
-                'Update binding'
-              ) : (
-                'Create binding'
-              )}
-            </button>
+        <button
+          type="submit"
+          className={`secondary-button${showBindPopAnimation ? ' bind-button-pop' : ''}${showBindShimmer ? ' bind-button-shimmer' : ''}`}
+          disabled={bindButtonDisabled}
+          onClick={stopBindAnimations}
+        >
+          {isTransferPending || isTransferConfirming ? (
+            <span className="spinner" />
+          ) : bindView === 'extend' ? (
+            'Update binding'
+          ) : bindView === 'add' ? (
+            'Create binding'
+          ) : bindView === 'add-hypr' ? (
+            'Update binding'
+          ) : (
+            'Create binding'
+          )}
+        </button>
             {hasBindings && (
               <button
                 type="button"
@@ -3866,11 +3945,56 @@ const DurationInputs = ({
   );
 };
 
-const TopStatusBar = () => (
-  <div className="top-banner">
-    <ConnectButton chainStatus="full" showBalance={false} />
-  </div>
-);
+const TopStatusBar = ({ walletConnected }: { walletConnected: boolean }) => {
+  const [showPopAnimation, setShowPopAnimation] = useState(!walletConnected);
+  const [showShimmer, setShowShimmer] = useState(false);
+  const shimmerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (!walletConnected) {
+      // Start shimmer after 3s, repeat every 5-10s
+      const timeout = setTimeout(() => {
+        setShowShimmer(true);
+        setTimeout(() => setShowShimmer(false), 800);
+
+        shimmerIntervalRef.current = setInterval(() => {
+          setShowShimmer(true);
+          setTimeout(() => setShowShimmer(false), 800);
+        }, 5000 + Math.random() * 5000);
+      }, 3000);
+
+      return () => {
+        clearTimeout(timeout);
+        if (shimmerIntervalRef.current) clearInterval(shimmerIntervalRef.current);
+      };
+    } else {
+      // Wallet connected - stop animations
+      setShowPopAnimation(false);
+      setShowShimmer(false);
+      if (shimmerIntervalRef.current) {
+        clearInterval(shimmerIntervalRef.current);
+        shimmerIntervalRef.current = null;
+      }
+    }
+  }, [walletConnected]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (shimmerIntervalRef.current) clearInterval(shimmerIntervalRef.current);
+    };
+  }, []);
+
+  return (
+    <div className="top-banner">
+      <div
+        className={`connect-button-wrapper${showPopAnimation ? ' bind-button-pop' : ''}${showShimmer ? ' bind-button-shimmer' : ''}`}
+      >
+        <ConnectButton chainStatus="full" showBalance={false} />
+      </div>
+    </div>
+  );
+};
 
 const shortHash = (hash: `0x${string}`) => `${hash.slice(0, 8)}…${hash.slice(-6)}`;
 

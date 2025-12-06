@@ -980,3 +980,69 @@ input[type='number'] {
     background: rgba(0, 0, 0, 0.04);
   }
 }
+
+/* Grayscale when not connected */
+.app.disconnected .phone-body {
+  filter: grayscale(1);
+  transition: filter 0.3s ease;
+}
+
+/* Keep ConnectButton colorful */
+.app.disconnected .top-banner {
+  filter: grayscale(0) !important;
+}
+
+/* Connect button wrapper */
+.connect-button-wrapper {
+  display: inline-block;
+  position: relative;
+}
+
+/* Pop entrance animation */
+@keyframes bind-button-pop {
+  0% {
+    transform: scale(0.9);
+  }
+  60% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1.0);
+  }
+}
+
+.bind-button-pop {
+  animation: bind-button-pop 0.4s ease-out forwards;
+}
+
+/* Sheen/shimmer animation */
+@keyframes bind-button-sheen {
+  0% {
+    left: -100%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+.bind-button-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.bind-button-shimmer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(
+    110deg,
+    transparent 20%,
+    rgba(255, 255, 255, 0.4) 50%,
+    transparent 80%
+  );
+  animation: bind-button-sheen 0.8s ease-in-out;
+  pointer-events: none;
+}
