@@ -1761,10 +1761,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "hyperprocess-macro"
-version = "0.1.0"
+name = "hyperapp_macro"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "061414cb1a535e9e2a9c98ac112c1ac770552ae53d6f6309133cdccf5c251659"
 dependencies = [
- "hyperware_process_lib 2.3.1",
+ "hyperware_process_lib",
  "proc-macro2",
  "quote",
  "syn 2.0.110",
@@ -1772,38 +1774,9 @@ dependencies = [
 
 [[package]]
 name = "hyperware_process_lib"
-version = "2.2.0"
-source = "git+https://github.com/hyperware-ai/process_lib.git?rev=26565b9c7c53fd6b66845c15ca14caa9d801d821#26565b9c7c53fd6b66845c15ca14caa9d801d821"
-dependencies = [
- "alloy",
- "alloy-primitives",
- "alloy-sol-macro",
- "alloy-sol-types",
- "anyhow",
- "base64",
- "bincode",
- "color-eyre",
- "futures-channel",
- "futures-util",
- "http",
- "mime_guess",
- "rand 0.8.5",
- "regex",
- "rmp-serde",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tracing",
- "tracing-error",
- "tracing-subscriber",
- "url",
- "uuid",
- "wit-bindgen 0.42.1",
-]
-
-[[package]]
-name = "hyperware_process_lib"
-version = "2.3.1"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c380fcf57586e4373553e909c93191d7ca8c10e1af7f7af58c83b7b9efbd4703"
 dependencies = [
  "alloy",
  "alloy-primitives",
@@ -1837,8 +1810,8 @@ version = "0.1.0"
 dependencies = [
  "alloy-primitives",
  "anyhow",
- "hyperprocess-macro",
- "hyperware_process_lib 2.3.1",
+ "hyperapp_macro",
+ "hyperware_process_lib",
  "hypr_dao_caller_utils",
  "process_macros",
  "serde",
@@ -1853,7 +1826,7 @@ dependencies = [
  "anyhow",
  "futures",
  "futures-util",
- "hyperware_process_lib 2.2.0",
+ "hyperware_process_lib",
  "once_cell",
  "process_macros",
  "serde",

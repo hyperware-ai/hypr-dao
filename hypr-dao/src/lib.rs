@@ -1,5 +1,4 @@
 use alloy_primitives::{Address as EthAddress, FixedBytes, U256};
-use hyperprocess_macro::hyperprocess;
 use hyperware_process_lib::{
     bindings::{Bindings, LockDetails as OnchainLockDetails, RegistrationDetails},
     eth::Provider,
@@ -106,14 +105,14 @@ impl Default for HyprDaoState {
     }
 }
 
-#[hyperprocess(
+#[hyperapp_macro::hyperapp(
     name = "HYPR DAO",
     ui = Some(hyperware_process_lib::http::server::HttpBindingConfig::default()),
     endpoints = vec![hyperware_process_lib::hyperapp::Binding::Http {
         path: "/api",
         config: hyperware_process_lib::http::server::HttpBindingConfig::default(),
     }],
-    save_config = hyperware_process_lib::hyperapp::SaveOptions::EveryMessage,
+    save_config = hyperware_process_lib::hyperapp::SaveOptions::OnDiff,
     wit_world = "hypr-dao-ware-dot-hypr-v0"
 )]
 impl HyprDaoState {
