@@ -13,7 +13,9 @@ const API_PREFIX =
 interface LockAndBindStore extends LockAndBindState {
   initialize: () => void;
   fetchLockStatus: (address: string) => Promise<void>;
+  fetchBaseLockStatus: () => Promise<void>;
   refreshLockStatus: (address: string) => Promise<void>;
+  resetWalletState: () => void;
   setError: (error: string | null) => void;
   clearError: () => void;
   acknowledgeLockModal: () => Promise<void>;
@@ -59,6 +61,19 @@ export const useBindAndLockStore = create<LockAndBindStore>((set, get) => ({
     }
   },
 
+  fetchBaseLockStatus: async () => {
+    try {
+      const status = await getBaseLockStatus();
+      set({
+        minLockDurationSeconds: status.min_lock_duration_seconds,
+        chainId: status.chain_id,
+      });
+    } catch (error) {
+      // Non-critical: minLockDurationSeconds will fallback in App.tsx
+      console.warn('Failed to fetch base lock status:', error);
+    }
+  },
+
   refreshLockStatus: async (address: string) => {
     // Keep refresh silent to avoid UI jitter on periodic polls
     set({ error: null });
@@ -70,6 +85,22 @@ export const useBindAndLockStore = create<LockAndBindStore>((set, get) => ({
         error: getErrorMessage(error),
       });
     }
+  },
+
+  resetWalletState: () => {
+    set({
+      ownerAddress: null,
+      lockDetails: null,
+      hyprOwned: null,
+      hyprApproved: null,
+      tokeregistryAllowance: null,
+      hyprTokenAddress: null,
+      availableToBind: null,
+      bindings: [],
+      lastError: null,
+      error: null,
+      isLoading: false,
+    });
   },
 
   setError: (error) => set({ error }),
@@ -86,6 +117,19 @@ export const useBindAndLockStore = create<LockAndBindStore>((set, get) => ({
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'An unknown error occurred';
+}
+
+async function getBaseLockStatus(): Promise<LockStatusPayload> {
+  const response = await fetch(`${API_PREFIX}/api/get-lock-status`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ GetLockStatus: null }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to get base lock status (status ${response.status})`);
+  }
+  const json = await response.json();
+  return parseResponse<LockStatusPayload>(json);
 }
 
 async function getLockStatusFor(address: string): Promise<LockStatusPayload> {
