@@ -9,3 +9,6 @@ members = [
     "target/hypr-dao-caller-util?",
 ]
 resolver = "2"
+
+[patch.crates-io]
+hyperware_process_lib = { path = "/Users/johnathanreale/RustroverProjects/process_lib" }

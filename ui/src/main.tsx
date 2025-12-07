@@ -8,15 +8,19 @@ import '@rainbow-me/rainbowkit/styles.css';
 import { Buffer } from 'buffer';
 import { WagmiProvider, http } from 'wagmi';
 import { RainbowKitProvider, getDefaultConfig } from '@rainbow-me/rainbowkit';
-import { base } from 'wagmi/chains';
+import { base, anvil } from 'wagmi/chains';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 if (!(window as { Buffer?: typeof Buffer }).Buffer) {
   (window as { Buffer?: typeof Buffer }).Buffer = Buffer;
 }
 
-const chains = [base] as const;
-const transports = { [base.id]: http() } as const;
+const simulationMode =
+  import.meta.env.VITE_SIMULATION_MODE === 'true' || import.meta.env.MODE === 'development';
+const chains = simulationMode ? ([anvil] as const) : ([base] as const);
+const transports: { [chainId: number]: ReturnType<typeof http> } = simulationMode
+  ? { [anvil.id]: http() }
+  : { [base.id]: http() };
 
 const wagmiConfig = getDefaultConfig({
   appName: 'Lock & Bind',
@@ -33,7 +37,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={queryClient}>
-        <RainbowKitProvider initialChain={base.id} modalSize="compact" showRecentTransactions>
+        <RainbowKitProvider
+          initialChain={simulationMode ? anvil.id : base.id}
+          modalSize="compact"
+          showRecentTransactions
+        >
           <App />
         </RainbowKitProvider>
       </QueryClientProvider>

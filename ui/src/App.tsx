@@ -3,7 +3,7 @@ import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useReconnect, useWaitForTransactionReceipt, useWriteContract } from 'wagmi';
-import { base } from 'wagmi/chains';
+import { base, anvil } from 'wagmi/chains';
 import { concatHex, keccak256, parseEther, stringToBytes } from 'viem';
 import './App.css';
 import { useBindAndLockStore } from './store/lock_and_bind';
@@ -51,6 +51,7 @@ const steps: StepConfig[] = [
 
 const TOKEN_REGISTRY_ADDRESSES: Record<number, `0x${string}`> = {
   [base.id]: '0x0000000000e8d224B902632757d5dbc51a451456',
+  [anvil.id]: '0x326Aa6822847B97a8387445a497e01253aC6E82B',
 };
 
 const tokenRegistryAbi = [
@@ -106,7 +107,10 @@ const ZERO_NAMEHASH = '0x0000000000000000000000000000000000000000000000000000000
 const CHAIN_LABELS: Record<number, string> = {
   [base.id]: 'Base',
 };
-const FALLBACK_CHAIN_ID = base.id;
+const FALLBACK_CHAIN_ID =
+  import.meta.env.VITE_SIMULATION_MODE === 'true' || import.meta.env.MODE === 'development'
+    ? anvil.id
+    : base.id;
 
 const SECONDS_PER_MINUTE = 60;
 const SECONDS_PER_HOUR = 60 * SECONDS_PER_MINUTE;

@@ -9,11 +9,20 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 const ICON: &str = include_str!("./icon");
+#[cfg(not(feature = "simulation-mode"))]
 const LOCAL_CHAIN_ID: u64 = 8453;
+#[cfg(feature = "simulation-mode")]
+const LOCAL_CHAIN_ID: u64 = 31337;
 
+#[cfg(not(feature = "simulation-mode"))]
 const LOCAL_TOKEN_REGISTRY: &str = "0x0000000000e8d224B902632757d5dbc51a451456";
+#[cfg(feature = "simulation-mode")]
+const LOCAL_TOKEN_REGISTRY: &str = "0x326Aa6822847B97a8387445a497e01253aC6E82B";
 
+#[cfg(not(feature = "simulation-mode"))]
 const MIN_LOCK_DURATION_SECONDS: u64 = 4 * 7 * 24 * 60 * 60;
+#[cfg(feature = "simulation-mode")]
+const MIN_LOCK_DURATION_SECONDS: u64 = 4 * 60;
 const HNS_INDEXER_TIMEOUT_S: u64 = 5;
 const ZERO_NAMEHASH: &str = "0x0000000000000000000000000000000000000000000000000000000000000000";
 
