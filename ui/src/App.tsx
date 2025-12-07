@@ -5,6 +5,7 @@ import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useReconnect, useWaitForTransactionReceipt, useWriteContract } from 'wagmi';
 import { base, anvil } from 'wagmi/chains';
 import { concatHex, keccak256, parseEther, stringToBytes } from 'viem';
+import duration from 'human-duration';
 import './App.css';
 import { useBindAndLockStore } from './store/lock_and_bind';
 import type { BalanceView, BindingView, LockDetailsView } from './types/lock_and_bind';
@@ -1778,7 +1779,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     const plusBuffer = baseRaw.getTime() + 60 * 1000;
     const clampedMs = Math.min(Math.max(plusBuffer, actualMinMsForView), maxMsForView);
     const base = new Date(clampedMs);
-    setLockCustomModalDate(formatDateIso(base));
+    setLockCustomModalDate(formatDateIsoInput(base));
     setLockCustomModalTime(formatTimeFromDate(base).slice(0, 5));
     setShowLockCustomModal(true);
     setLockMobileDateChoice('__custom__');
@@ -2389,8 +2390,8 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                   <span>Date</span>
                   <input
                     type="date"
-                    min={formatDateIso(new Date(actualMinMsForView))}
-                    max={formatDateIso(new Date(maxMsForView))}
+                    min={formatDateIsoInput(new Date(actualMinMsForView))}
+                    max={formatDateIsoInput(new Date(maxMsForView))}
                     value={lockCustomModalDate}
                     onChange={(e) => {
                       const raw = e.target.value;
@@ -2408,7 +2409,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                         maxMsForView,
                       );
                       const clamped = new Date(clampedMs);
-                      setLockCustomModalDate(formatDateIso(clamped));
+                      setLockCustomModalDate(formatDateIsoInput(clamped));
                     }}
                   />
                 </label>
@@ -3105,7 +3106,7 @@ const BindStep = ({
       effectiveTransferEndDateMaxMs,
     );
     const base = new Date(clampedMs);
-    setTransferCustomModalDate(formatDateIso(base));
+    setTransferCustomModalDate(formatDateIsoInput(base));
     setTransferCustomModalTime(formatTimeFromDate(base).slice(0, 5));
     setShowTransferCustomModal(true);
     setTransferMobileDateChoice('__custom__');
@@ -3818,8 +3819,8 @@ const BindStep = ({
                 <span>Date</span>
                 <input
                   type="date"
-                  min={formatDateIso(new Date(effectiveTransferEndDateMinMs))}
-                  max={formatDateIso(new Date(effectiveTransferEndDateMaxMs))}
+                  min={formatDateIsoInput(new Date(effectiveTransferEndDateMinMs))}
+                  max={formatDateIsoInput(new Date(effectiveTransferEndDateMaxMs))}
                   value={transferCustomModalDate}
                   onChange={(e) => setTransferCustomModalDate(e.target.value)}
                 />
@@ -3967,7 +3968,28 @@ const iconGlyph: Record<StepIcon, string> = {
   chain: '⛓',
 };
 
-const formatDateIso = (date: Date) => date.toISOString().slice(0, 10);
+const formatDateIsoInput = (date: Date) => date.toISOString().slice(0, 10);
+
+const formatDateIso = (date: Date) => {
+  const monthNames = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  const month = monthNames[date.getMonth()];
+  const day = date.getDate();
+  const year = date.getFullYear();
+  return `${month} ${day}, ${year}`;
+};
 
 const roundUpToNextDay = (ms: number) => {
   const d = new Date(ms);
@@ -4177,18 +4199,13 @@ const formatDateTimeAmPm = (ms: number) => {
   const hours24 = d.getHours();
   const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
   const ampm = hours24 >= 12 ? 'PM' : 'AM';
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(hours12)}:${pad(d.getMinutes())} ${ampm}`;
+  return `${formatDateIso(d)} ${pad(hours12)}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${ampm}`;
 };
 
 const formatTimestamp = (seconds: number) => {
   if (!seconds) return '0';
   if (seconds === Number.MAX_SAFE_INTEGER) return 'Unknown';
-  const d = new Date(seconds * 1000);
-  const pad = (v: number) => v.toString().padStart(2, '0');
-  const hours24 = d.getHours();
-  const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
-  const ampm = hours24 >= 12 ? 'PM' : 'AM';
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(hours12)}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${ampm}`;
+  return formatDateTimeAmPm(seconds * 1000);
 };
 
 const formatMsWithSeconds = (ms: number | null | undefined) => {
@@ -4199,12 +4216,7 @@ const formatMsWithSeconds = (ms: number | null | undefined) => {
 
 const formatSeconds = (value: number) => {
   if (value <= 0) return '0s';
-  const days = Math.floor(value / 86400);
-  const hours = Math.floor((value % 86400) / 3600);
-  const minutes = Math.floor((value % 3600) / 60);
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
+  return duration.fmt(value * 1000).segments(2);
 };
 
 const isHexHash = (value: string): value is `0x${string}` =>
@@ -4232,19 +4244,8 @@ const resolveNamehash = (input: string): `0x${string}` => {
 };
 
 const formatDurationSeconds = (seconds: number) => {
-  const units = [
-    { label: 'year', value: SECONDS_PER_YEAR },
-    { label: 'month', value: SECONDS_PER_MONTH },
-    { label: 'week', value: SECONDS_PER_WEEK },
-    { label: 'day', value: SECONDS_PER_DAY },
-  ];
-  for (const unit of units) {
-    const amount = seconds / unit.value;
-    if (Number.isInteger(amount)) {
-      return `${amount.toLocaleString()} ${unit.label}${amount === 1 ? '' : 's'} (${seconds.toLocaleString()} seconds)`;
-    }
-  }
-  return `${seconds.toLocaleString()} seconds`;
+  if (seconds <= 0) return '0 seconds';
+  return duration.fmt(seconds * 1000).segments(2);
 };
 
 const secondsUntilDate = (target: Date | null, baseSeconds: number) => {
