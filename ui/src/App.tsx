@@ -55,6 +55,8 @@ const TOKEN_REGISTRY_ADDRESSES: Record<number, `0x${string}`> = {
   [anvil.id]: '0x326Aa6822847B97a8387445a497e01253aC6E82B',
 };
 
+const showDiagnostics = import.meta.env.VITE_SHOW_DIAGNOSTICS === 'true';
+
 const tokenRegistryAbi = [
   {
     type: 'function',
@@ -2185,7 +2187,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
               </h3>
               {lockView === 'manage' && !hasExistingLock && <p>{lockHeaderSubtitle}</p>}
             </div>
-            {(lockView === 'manage' || lockView === 'extend') && (
+            {showDiagnostics && (lockView === 'manage' || lockView === 'extend') && (
               <button type="button" className="secondary-button ghost diag-button" onClick={openLockDiagnostics}>
                 Diagnostics
               </button>
@@ -3601,7 +3603,7 @@ const BindStep = ({
               {bindView === 'create' && <h3>Create first binding</h3>}
               {bindView === 'add' && <h3>Add new binding</h3>}
             </div>
-            {(bindView === 'create' || bindView === 'add' || bindView === 'extend') && (
+            {showDiagnostics && (bindView === 'create' || bindView === 'add' || bindView === 'extend') && (
               <button type="button" className="secondary-button ghost diag-button" onClick={openBindDiagnostics}>
                 Diagnostics
               </button>
