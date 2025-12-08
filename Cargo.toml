@@ -11,4 +11,4 @@ members = [
 resolver = "2"
 
 [patch.crates-io]
-hyperware_process_lib = { path = "/Users/johnathanreale/RustroverProjects/process_lib" }
+hyperware_process_lib = { git = "https://github.com/hyperware-ai/process_lib.git", rev = "7cf1aa2e9bcb442de4e933bb2afc681b9928a187" }
