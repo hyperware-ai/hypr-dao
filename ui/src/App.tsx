@@ -3427,8 +3427,13 @@ const BindStep = ({
       }
 
       let durationForSubmission = selectedTransferDurationSeconds;
-      if (bindView === 'add-hypr' && targetBinding) {
-        durationForSubmission = BigInt(targetBinding.remaining_seconds ?? 0);
+      if (bindView === 'add-hypr') {
+        durationForSubmission = 0n; // adding HYPR should not change expiry
+      } else if (bindView === 'extend' && targetBinding) {
+        const currentRemaining = BigInt(targetBinding.remaining_seconds ?? 0);
+        const desiredRemaining = selectedTransferDurationSeconds;
+        durationForSubmission =
+          desiredRemaining > currentRemaining ? desiredRemaining - currentRemaining : 0n;
       }
       await writeTransferContract({
         address: targetRegistryAddress,
