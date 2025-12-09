@@ -845,17 +845,18 @@ function App() {
                     </div>
                   ) : (
                     <>
-                      {activeStep === 'approve' && (
-                        <ApproveStep
-                          walletConnected={walletConnected}
-                          walletAddress={address}
-                          hyprTokenAddress={hyprTokenAddress}
-                          hyprOwned={hyprOwned}
-                          lockAllowance={tokeregistryAllowance}
-                          targetRegistryAddress={targetRegistryAddress}
-                          refreshLockStatus={refreshLockStatusForWallet}
-                        />
-                      )}
+          {activeStep === 'approve' && (
+            <ApproveStep
+              walletConnected={walletConnected}
+              walletAddress={address}
+              hyprTokenAddress={hyprTokenAddress}
+              hyprOwned={hyprOwned}
+              lockAllowance={tokeregistryAllowance}
+              targetRegistryAddress={targetRegistryAddress}
+              refreshLockStatus={refreshLockStatusForWallet}
+              hasExistingLock={lockedWei > 0n}
+            />
+          )}
 
                       {activeStep === 'lock' && (
                         <LockStep
@@ -2478,6 +2479,7 @@ interface ApproveStepProps {
   lockAllowance: BalanceView | null;
   targetRegistryAddress: `0x${string}`;
   refreshLockStatus: () => Promise<void>;
+  hasExistingLock: boolean;
 }
 
 const ApproveStep = ({
@@ -2488,14 +2490,18 @@ const ApproveStep = ({
   lockAllowance,
   targetRegistryAddress,
   refreshLockStatus,
+  hasExistingLock,
 }: ApproveStepProps) => {
   const [amountInput, setAmountInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [successHash, setSuccessHash] = useState<`0x${string}` | null>(null);
+  const [isRevoking, setIsRevoking] = useState(false);
 
   const hyprOwnedWei = hyprOwned?.amount_raw_wei ? BigInt(hyprOwned.amount_raw_wei) : 0n;
   const lockAvailableWei = lockAllowance?.amount_raw_wei ? BigInt(lockAllowance.amount_raw_wei) : 0n;
   const amountProvided = amountInput !== '';
+  const hasExistingApproval = lockAvailableWei > 0n;
+  const hasActiveLock = hasExistingLock;
 
   const {
     data: allowanceTxHash,
@@ -2517,6 +2523,7 @@ const ApproveStep = ({
     if (isAllowanceConfirmed && allowanceTxHash) {
       setSuccessHash(allowanceTxHash);
       setAmountInput('');
+      setIsRevoking(false);
       void refreshLockStatus();
     }
   }, [isAllowanceConfirmed, allowanceTxHash, refreshLockStatus]);
@@ -2525,6 +2532,7 @@ const ApproveStep = ({
   useEffect(() => {
     if (allowanceWriteError) {
       setError(allowanceWriteError.message || 'Approval failed');
+      setIsRevoking(false);
     }
   }, [allowanceWriteError]);
 
@@ -2577,6 +2585,33 @@ const ApproveStep = ({
     }
   };
 
+  const handleRevoke = async () => {
+    setError(null);
+    setSuccessHash(null);
+    resetAllowanceWrite();
+
+    if (!walletConnected || !walletAddress) {
+      setError('Connect a wallet to revoke.');
+      return;
+    }
+    if (!hyprTokenAddress) {
+      setError('Unable to resolve HYPR token address.');
+      return;
+    }
+    try {
+      setIsRevoking(true);
+      await writeApproveContract({
+        address: hyprTokenAddress as `0x${string}`,
+        abi: erc20ApproveAbi,
+        functionName: 'approve',
+        args: [targetRegistryAddress, 0n],
+      });
+    } catch (err) {
+      setIsRevoking(false);
+      setError(err instanceof Error ? err.message : 'Revoke failed');
+    }
+  };
+
   const approveButtonDisabled =
     !walletConnected ||
     isAllowancePending ||
@@ -2591,15 +2626,35 @@ const ApproveStep = ({
           <div className="form-header-text">
             <h3>Approve HYPR for locking</h3>
             <p className="form-subtitle">
-              Approve an amount of HYPR to be used for locking.
+              {hasExistingApproval
+                ? hasActiveLock
+                  ? 'Approving HYPR permits the HYPR Registry to lock up to the amount you have designated. You may revoke or adjust your existing approved amount.'
+                  : 'Approving HYPR permits the HYPR Registry to lock up to the amount you have designated. You may revoke or adjust your existing approved amount, or you may proceed to the Lock tab to lock your HYPR.'
+                : 'Approving HYPR permits the HYPR Registry to lock up to the amount you have designated. Do not approve more than you intend to lock.'}
             </p>
           </div>
         </div>
 
         {lockAvailableWei > 0n && (
           <div className="approve-status">
-            <span className="status-label">Current approval:</span>
-            <span className="status-value">{lockAllowance?.amount_formatted_hypr ?? '0'} HYPR</span>
+            <div className="approve-status-row">
+              <span className="status-label">Current approval:</span>
+              <span className="status-value">{lockAllowance?.amount_formatted_hypr ?? '0'}</span>
+            </div>
+            <div className="approve-status-row">
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={!walletConnected || isAllowancePending || isAllowanceConfirming}
+                onClick={handleRevoke}
+              >
+                {isRevoking || isAllowancePending || isAllowanceConfirming ? (
+                  <span className="spinner" />
+                ) : (
+                  'Revoke'
+                )}
+              </button>
+            </div>
           </div>
         )}
 
@@ -2607,7 +2662,7 @@ const ApproveStep = ({
           <label className="input-field">
             <span>
               {lockAvailableWei > 0n
-                ? `New approval amount ${hyprOwned ? `(up to ${hyprOwned.amount_formatted_hypr})` : '(HYPR)'}`
+                ? `Updated amount to approve ${hyprOwned ? `(up to ${hyprOwned.amount_formatted_hypr})` : '(HYPR)'}`
                 : `Amount to approve ${hyprOwned ? `(up to ${hyprOwned.amount_formatted_hypr})` : '(HYPR)'}`}
             </span>
             <input
@@ -2625,7 +2680,13 @@ const ApproveStep = ({
 
         <div className="form-actions">
           <button type="submit" className="secondary-button" disabled={approveButtonDisabled}>
-            {isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Submit Approval'}
+            {isAllowancePending || isAllowanceConfirming ? (
+              <span className="spinner" />
+            ) : hasExistingApproval ? (
+              'Update'
+            ) : (
+              'Submit'
+            )}
           </button>
         </div>
 
@@ -3970,7 +4031,7 @@ const BottomTabs = ({
 );
 
 const iconGlyph: Record<StepIcon, string> = {
-  check: '✔',
+  check: '🆗',
   lock: '🔒',
   chain: '⛓',
 };
