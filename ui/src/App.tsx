@@ -3578,8 +3578,13 @@ const BindStep = ({
     setTransferEndDateInput(candidate);
     setTransferEndTimeInput(formatTimeFromDate(candidate));
     setTransferEndTimeDirty(true);
-    setTransferDurationDirty(true);
-    setTransferMobileDuration('');
+    // Sync duration inputs to the chosen custom date so duration-first logic stays aligned
+    const durationSeconds = Math.max(0, Math.round(delta / 1000));
+    setTransferDurationInputs(durationInputsFromSeconds(BigInt(durationSeconds)));
+    setTransferDurationMode('duration');
+    setTransferDurationDirty(false);
+    // Mark custom selection so defaulting logic does not overwrite with MIN
+    setTransferMobileDuration('__custom__');
     setShowTransferCustomModal(false);
   };
   const handleTransferDateClick = () => {
