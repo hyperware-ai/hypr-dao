@@ -1180,8 +1180,8 @@ const LockStep = ({
     [extendMinMillis],
   );
   const lockEndDateDurationSeconds = secondsUntilDate(lockEndDateInput, Math.floor(Date.now() / 1000));
-  const effectiveMode: DurationMode =
-    lockView === 'extend' || lockView === 'manage' ? 'end-date' : lockDurationMode;
+  // Duration is source of truth for new locks; use end-date only when a lock already exists (extend/add)
+  const effectiveMode: DurationMode = hasExistingLock ? 'end-date' : 'duration';
   const [lockEndTimeInput, setLockEndTimeInput] = useState('00:00:00');
   const [lockEndTimeDirty, setLockEndTimeDirty] = useState(false);
   useEffect(() => {
@@ -1204,14 +1204,19 @@ const LockStep = ({
     effectiveMode === 'duration'
       ? lockDurationSecondsFromInputs
       : lockEndDateDurationSeconds ?? 0n;
-  const lockUnlockPreview = useMemo(() => {
-    if (selectedLockDurationSeconds <= 0n) {
-      return null;
-    }
-    const nowSeconds = Math.floor(Date.now() / 1000);
-    return formatTimestamp(nowSeconds + Number(selectedLockDurationSeconds));
-  }, [selectedLockDurationSeconds]);
-
+  useEffect(() => {
+    if (hasExistingLock) return;
+    if (displayLockView !== 'manage') return;
+    if (selectedLockDurationSeconds <= 0n) return;
+    const update = () => {
+      const now = Math.floor(Date.now() / 1000);
+      const next = new Date((now + Number(selectedLockDurationSeconds)) * 1000);
+      setLockEndDateInput(next);
+    };
+    update();
+    const id = setInterval(update, 1_000);
+    return () => clearInterval(id);
+  }, [hasExistingLock, displayLockView, selectedLockDurationSeconds]);
   const {
     data: allowanceTxHash,
     error: allowanceWriteError,
@@ -2401,7 +2406,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                   lockView === 'extend' ? () => {} : () => setShowLockPrecision((prev) => !prev)
                 }
                 durationSeconds={selectedLockDurationSeconds}
-                unlockPreview={lockUnlockPreview}
+                unlockPreview={null}
                 computedDurationLabel={
                   lockView === 'extend'
                     ? undefined
@@ -2413,7 +2418,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                   lockView === 'extend'
                     ? undefined
                     : hasExistingLock
-                      ? lockUnlockPreview ?? undefined
+                      ? undefined
                       : undefined
                 }
                 resolvedDurationLabel={
@@ -2432,8 +2437,8 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                   setLockEndTimeDirty(true);
                 }}
                 endTimeValue={lockEndTimeInput}
-                endDateMin={pickerMinDateForView}
-                endDateMax={new Date(maxMsForView)}
+                endDateMin={undefined}
+                endDateMax={undefined}
                 showUnlockPreview={!hasExistingLock && lockView !== 'extend'}
                 durationRangeLabel={
                   lockView === 'manage' && !hasExistingLock
@@ -2503,26 +2508,9 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                   <span>Date</span>
                   <input
                     type="date"
-                    min={formatDateIsoInput(new Date(actualMinMsForView))}
-                    max={formatDateIsoInput(new Date(maxMsForView))}
                     value={lockCustomModalDate}
                     onChange={(e) => {
-                      const raw = e.target.value;
-                      if (!raw) {
-                        setLockCustomModalDate(raw);
-                        return;
-                      }
-                      const timePart = lockCustomModalTime || '00:00';
-                      const candidate = new Date(`${raw}T${timePart}:00`);
-                      if (Number.isNaN(candidate.getTime())) {
-                        return;
-                      }
-                      const clampedMs = Math.min(
-                        Math.max(candidate.getTime(), actualMinMsForView),
-                        maxMsForView,
-                      );
-                      const clamped = new Date(clampedMs);
-                      setLockCustomModalDate(formatDateIsoInput(clamped));
+                      setLockCustomModalDate(e.target.value);
                     }}
                   />
                 </label>
@@ -4161,8 +4149,6 @@ const BindStep = ({
                 <span>Date</span>
                 <input
                   type="date"
-                  min={formatDateIsoInput(new Date(effectiveTransferEndDateMinMs))}
-                  max={formatDateIsoInput(new Date(effectiveTransferEndDateMaxMs))}
                   value={transferCustomModalDate}
                   onChange={(e) => setTransferCustomModalDate(e.target.value)}
                 />
@@ -4367,8 +4353,8 @@ const DurationInputs = ({
   onEndDateChange,
   onEndTimeChange,
   endTimeValue,
-  endDateMin,
-  endDateMax,
+  endDateMin: _endDateMin,
+  endDateMax: _endDateMax,
   showUnlockPreview = true,
   endDateLabel = 'New end date',
   endTimeLabel = 'New end time',
@@ -4378,6 +4364,23 @@ const DurationInputs = ({
   endDateRangeLabel,
   showModeToggle = true,
 }: DurationInputsProps) => {
+  const [liveUnlockPreview, setLiveUnlockPreview] = useState<string | null>(null);
+  useEffect(() => {
+    const update = () => {
+      if (unlockPreview) {
+        setLiveUnlockPreview(unlockPreview);
+      } else if (durationSeconds > 0n) {
+        const now = Math.floor(Date.now() / 1000);
+        setLiveUnlockPreview(formatTimestamp(now + Number(durationSeconds)));
+      } else {
+        setLiveUnlockPreview(null);
+      }
+    };
+    update();
+    const id = setInterval(update, 1_000);
+    return () => clearInterval(id);
+  }, [unlockPreview, durationSeconds]);
+
   const renderField = (field: DurationField) => (
     <label className="input-field" key={field}>
       <span>{DURATION_LABELS[field]}</span>
@@ -4394,7 +4397,7 @@ const DurationInputs = ({
 
   const durationLabel =
     durationSeconds > 0n ? formatDurationSeconds(Number(durationSeconds)) : '0 seconds';
-  const unlockText = unlockPreview ?? 'Set a duration to preview end time';
+  const unlockText = liveUnlockPreview ?? 'Set a duration to preview end time';
 
   return (
     <div className="duration-section">
@@ -4446,8 +4449,6 @@ const DurationInputs = ({
               selected={endDateValue}
               onChange={onEndDateChange}
               dateFormat="yyyy-MM-dd"
-              minDate={endDateMin}
-              maxDate={endDateMax}
               className="date-picker-input"
               calendarClassName="date-picker-calendar"
               popperClassName="date-picker-popper"
