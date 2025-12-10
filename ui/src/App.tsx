@@ -297,17 +297,13 @@ const DURATION_LABELS: Record<DurationField, string> = {
 
 const DURATION_INPUT_DEFAULTS: DurationInputValues = {
   years: '0',
-  months: '1',
+  months: '0',
   weeks: '0',
   days: '0',
   hours: '0',
   minutes: '0',
   seconds: '0',
 };
-
-const createDefaultDurationInputs = (): DurationInputValues => ({
-  ...DURATION_INPUT_DEFAULTS,
-});
 
 const inputsToDurationParts = (inputs: DurationInputValues): DurationParts => ({
   years: parseDurationInputValue(inputs.years),
@@ -370,10 +366,6 @@ const durationInputsFromSeconds = (seconds: bigint): DurationInputValues => {
   return result;
 };
 
-const DEFAULT_DURATION_SECONDS = durationPartsToSeconds(
-  inputsToDurationParts(createDefaultDurationInputs()),
-);
-
 const clampDurationSeconds = (value: bigint, minSeconds: number) => {
   const minBigInt = BigInt(minSeconds);
   if (minBigInt <= 0) {
@@ -386,7 +378,7 @@ const createDurationInputsAtLeastMin = (seconds: bigint, minSeconds: number) =>
   durationInputsFromSeconds(clampDurationSeconds(seconds, minSeconds));
 
 const createDefaultDurationInputsAtLeastMin = (minSeconds: number) =>
-  createDurationInputsAtLeastMin(DEFAULT_DURATION_SECONDS, minSeconds);
+  durationInputsFromSeconds(BigInt(minSeconds));
 
 const calculateRequiredAdditionalDuration = (
   existingAmount: bigint,
@@ -1038,6 +1030,7 @@ const LockStep = ({
   lockCreateShimmer,
   onWithdrawSuccess,
 }: LockStepProps) => {
+  const nowMs = useCurrentTimeMs();
   const [amountInput, setAmountInput] = useState('');
   const [durationInputs, setDurationInputs] = useState<DurationInputValues>(() =>
     createDefaultDurationInputsAtLeastMin(minLockDurationSeconds),
@@ -1076,8 +1069,7 @@ const LockStep = ({
   const allowanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const manageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const manageRetryRef = useRef(false);
-  const nowSecondsRef = useRef(Math.floor(Date.now() / 1000));
-  const nowSeconds = nowSecondsRef.current;
+  const nowSeconds = Math.floor(nowMs / 1000);
   const [userSetLockView, setUserSetLockView] = useState(false);
 
   const durationParts = useMemo(() => inputsToDurationParts(durationInputs), [durationInputs]);
@@ -1158,6 +1150,7 @@ const LockStep = ({
       setLockEndTimeInput(formatTimeFromDate(next));
       setLockEndTimeDirty(true);
       setLockDurationDirty(true);
+      setDurationInputs(durationInputsFromSeconds(BigInt(seconds)));
     },
     [formatTimeFromDate],
   );
@@ -1208,15 +1201,9 @@ const LockStep = ({
     if (hasExistingLock) return;
     if (displayLockView !== 'manage') return;
     if (selectedLockDurationSeconds <= 0n) return;
-    const update = () => {
-      const now = Math.floor(Date.now() / 1000);
-      const next = new Date((now + Number(selectedLockDurationSeconds)) * 1000);
-      setLockEndDateInput(next);
-    };
-    update();
-    const id = setInterval(update, 1_000);
-    return () => clearInterval(id);
-  }, [hasExistingLock, displayLockView, selectedLockDurationSeconds]);
+    const next = new Date(nowMs + Number(selectedLockDurationSeconds) * 1000);
+    setLockEndDateInput(next);
+  }, [hasExistingLock, displayLockView, selectedLockDurationSeconds, nowMs]);
   const {
     data: allowanceTxHash,
     error: allowanceWriteError,
@@ -1636,9 +1623,14 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
       return;
     }
     const ms = candidate.getTime();
-    if (ms < actualMinMsForView || ms > maxMsForView) {
+    const minDelta = Math.max(0, actualMinMsForView - nowMs);
+    const maxDelta = Math.max(0, maxMsForView - nowMs);
+    const delta = ms - nowMs;
+    if (delta < minDelta || delta > maxDelta) {
       return;
     }
+    const secondsFromNow = Math.max(0, Math.floor((ms - nowMs) / 1000));
+    setDurationInputs(durationInputsFromSeconds(BigInt(secondsFromNow)));
     setLockCustomDateMs(ms);
     setLockMobileDateChoice(ms.toString());
     setLockEndDateInput(candidate);
@@ -1808,11 +1800,6 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     }
     return lockEndDateMin.getTime();
   }, [addWeightedMinMsRaw, hasExistingLock, lockEndDateMin, lockView, extendMinMillis]);
-  const pickerMinDateForView = useMemo(() => {
-    const d = new Date(actualMinMsForView);
-    d.setHours(0, 0, 0, 0);
-    return d;
-  }, [actualMinMsForView]);
   const displayMinDateForHint = useMemo(
     () => roundUpToNextDay(actualMinMsForView),
     [actualMinMsForView],
@@ -1846,8 +1833,19 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     const candidate = new Date(`${lockCustomModalDate}T${lockCustomModalTime}:00`);
     if (Number.isNaN(candidate.getTime())) return true;
     const ms = candidate.getTime();
-    return ms < actualMinMsForView || ms > maxMsForView;
-  }, [actualMinMsForView, lockCustomModalDate, lockCustomModalTime, maxMsForView]);
+    const minDelta = Math.max(0, actualMinMsForView - nowMs);
+    const maxDelta = Math.max(0, maxMsForView - nowMs);
+    const delta = ms - nowMs;
+    return delta < minDelta || delta > maxDelta;
+  }, [actualMinMsForView, lockCustomModalDate, lockCustomModalTime, maxMsForView, nowMs]);
+  const lockCustomHintMin = useMemo(
+    () => new Date(nowMs + Math.max(0, actualMinMsForView - nowMs)),
+    [actualMinMsForView, nowMs],
+  );
+  const lockCustomHintMax = useMemo(
+    () => new Date(nowMs + Math.max(0, maxMsForView - nowMs)),
+    [maxMsForView, nowMs],
+  );
   const lockCustomPrefillMs = useMemo(() => {
     const baseRaw = lockEndDateInput ?? new Date(defaultEndMsForView);
     const plusBuffer = baseRaw.getTime() + 60 * 1000;
@@ -1868,10 +1866,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     setShowLockCustomModal(false);
   }, [actualMinMsForView, lockRangeCollapsed]);
   const handleLockDateClick = () => {
-    const baseRaw = lockEndDateInput ?? new Date(defaultEndMsForView);
-    const plusBuffer = baseRaw.getTime() + 60 * 1000;
-    const clampedMs = Math.min(Math.max(plusBuffer, actualMinMsForView), maxMsForView);
-    const base = new Date(clampedMs);
+    const base = new Date(nowMs);
     setLockCustomModalDate(formatDateIsoInput(base));
     setLockCustomModalTime(formatTimeFromDate(base).slice(0, 5));
     setShowLockCustomModal(true);
@@ -1925,8 +1920,8 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
         { label: '-3 days', seconds: 3 * SECONDS_PER_DAY },
       ];
       const nowMs = Date.now();
-      const minOptionMs = addDynamicMinMsBuffered ?? minEndDateForValidationMs + TWENTY_FOUR_HOURS_MS;
-      const maxOptionMs = currentExpiryMs ?? maxMsForView;
+    const minOptionMs = addDynamicMinMsBuffered ?? minEndDateForValidationMs + TWENTY_FOUR_HOURS_MS;
+    const maxOptionMs = currentExpiryMs ?? maxMsForView;
       const candidates: { label: string; seconds: number; value: string }[] = [];
       // MIN duration entry (buffered min)
       const minSeconds = Math.max(0, Math.round((minOptionMs - nowMs) / 1000));
@@ -1953,9 +1948,9 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
       return Array.from(dedup.values());
     }
     if (!isMobile) return MOBILE_DURATION_OPTIONS;
-    const nowMs = Date.now();
-    const minSeconds = Math.max(0, Math.round((minEndDateForValidationMs - nowMs) / 1000));
-    const maxSeconds = Math.max(minSeconds, Math.round((maxMsForView - nowMs) / 1000));
+    const nowMsLocal = Date.now();
+    const minSeconds = Math.max(0, Math.round((minEndDateForValidationMs - nowMsLocal) / 1000));
+    const maxSeconds = Math.max(minSeconds, Math.round((maxMsForView - nowMsLocal) / 1000));
     const currentDurationSeconds =
       hasExistingLock && lockDetails?.unlock_timestamp
         ? Math.max(0, lockDetails.unlock_timestamp - nowSeconds)
@@ -2537,12 +2532,10 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
               Cancel
             </button>
           </div>
-          {lockCustomSetDisabled && (
-            <div className="input-subtext modal-hint">
-              The custom value must be between {formatDateTimeAmPm(actualMinMsForView)} and{' '}
-              {formatDateTimeAmPm(maxMsForView)}.
-            </div>
-          )}
+          <div className={`input-subtext modal-hint${lockCustomSetDisabled ? ' inline-error' : ''}`}>
+            The custom value must be between {formatDateTimeAmPm(lockCustomHintMin.getTime())} and{' '}
+            {formatDateTimeAmPm(lockCustomHintMax.getTime())}.
+          </div>
           </div>
         </div>
       )}
@@ -2971,6 +2964,7 @@ const BindStep = ({
   bindCreatePop,
   bindCreateShimmer,
 }: BindStepProps) => {
+  const nowMs = useCurrentTimeMs();
   const [dstNameInput, setDstNameInput] = useState('');
   const [transferAmountInput, setTransferAmountInput] = useState('');
   const [transferDurationInputs, setTransferDurationInputs] = useState<DurationInputValues>(() =>
@@ -3384,8 +3378,19 @@ const BindStep = ({
     const candidate = new Date(`${transferCustomModalDate}T${transferCustomModalTime}:00`);
     if (Number.isNaN(candidate.getTime())) return true;
     const ms = candidate.getTime();
-    return ms < effectiveTransferEndDateMinMs || ms > effectiveTransferEndDateMaxMs;
-  }, [effectiveTransferEndDateMaxMs, effectiveTransferEndDateMinMs, transferCustomModalDate, transferCustomModalTime]);
+    const minDelta = Math.max(0, effectiveTransferEndDateMinMs - nowMs);
+    const maxDelta = Math.max(0, effectiveTransferEndDateMaxMs - nowMs);
+    const delta = ms - nowMs;
+    return delta < minDelta || delta > maxDelta;
+  }, [effectiveTransferEndDateMaxMs, effectiveTransferEndDateMinMs, nowMs, transferCustomModalDate, transferCustomModalTime]);
+  const transferCustomHintMin = useMemo(
+    () => new Date(nowMs + Math.max(0, effectiveTransferEndDateMinMs - nowMs)),
+    [effectiveTransferEndDateMinMs, nowMs],
+  );
+  const transferCustomHintMax = useMemo(
+    () => new Date(nowMs + Math.max(0, effectiveTransferEndDateMaxMs - nowMs)),
+    [effectiveTransferEndDateMaxMs, nowMs],
+  );
   const handleTransferCustomSet = () => {
     if (!transferCustomModalDate || !transferCustomModalTime) {
       setShowTransferCustomModal(false);
@@ -3397,7 +3402,10 @@ const BindStep = ({
       return;
     }
     const ms = candidate.getTime();
-    if (ms < effectiveTransferEndDateMinMs || ms > effectiveTransferEndDateMaxMs) {
+    const minDelta = Math.max(0, effectiveTransferEndDateMinMs - nowMs);
+    const maxDelta = Math.max(0, effectiveTransferEndDateMaxMs - nowMs);
+    const delta = ms - nowMs;
+    if (delta < minDelta || delta > maxDelta) {
       return;
     }
     setTransferCustomDateMs(ms);
@@ -3411,15 +3419,7 @@ const BindStep = ({
   };
   const handleTransferDateClick = () => {
     if (!transferDateEnabled) return;
-    const baseRaw =
-      transferEndDateInput ??
-      (effectiveTransferEndDateDefault ?? new Date(effectiveTransferEndDateMaxMs));
-    const plusBuffer = baseRaw.getTime() + 60 * 1000;
-    const clampedMs = Math.min(
-      Math.max(plusBuffer, effectiveTransferEndDateMinMs),
-      effectiveTransferEndDateMaxMs,
-    );
-    const base = new Date(clampedMs);
+    const base = new Date(nowMs);
     setTransferCustomModalDate(formatDateIsoInput(base));
     setTransferCustomModalTime(formatTimeFromDate(base).slice(0, 5));
     setShowTransferCustomModal(true);
@@ -4176,12 +4176,10 @@ const BindStep = ({
                 Cancel
               </button>
             </div>
-            {transferCustomSetDisabled && (
-              <div className="input-subtext modal-hint">
-                The custom value must be between {formatDateTimeAmPm(effectiveTransferEndDateMinMs)} and{' '}
-                {formatDateTimeAmPm(effectiveTransferEndDateMaxMs)}.
-              </div>
-            )}
+            <div className={`input-subtext modal-hint${transferCustomSetDisabled ? ' inline-error' : ''}`}>
+              The custom value must be between {formatDateTimeAmPm(transferCustomHintMin.getTime())} and{' '}
+              {formatDateTimeAmPm(transferCustomHintMax.getTime())}.
+            </div>
           </div>
         </div>
       )}
@@ -4319,6 +4317,15 @@ const formatDateIso = (date: Date) => {
   const day = date.getDate();
   const year = date.getFullYear();
   return `${month} ${day}, ${year}`;
+};
+
+const useCurrentTimeMs = () => {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => clearInterval(id);
+  }, []);
+  return nowMs;
 };
 
 const roundUpToNextDay = (ms: number) => {
