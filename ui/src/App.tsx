@@ -407,7 +407,7 @@ const calculateRequiredAdditionalDuration = (
 };
 
 function App() {
-  const [activeStep, setActiveStep] = useState<StepId>('approve');
+  const [activeStep, setActiveStep] = useState<StepId>('lock');
   const [lockUpdateNonce, setLockUpdateNonce] = useState(0);
   const [hasBoundAnything, setHasBoundAnything] = useState(() =>
     localStorage.getItem('hypr-dao-has-bound') === 'true'
@@ -459,13 +459,16 @@ function App() {
   const [showLockPopAnimation, setShowLockPopAnimation] = useState(false);
   const [showLockShimmer, setShowLockShimmer] = useState(false);
   const lockShimmerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lockShimmerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevLockApproved = useRef(false);
 
   // Bind tab animation state (for bottom tabs)
   const [showBindTabPopAnimation, setShowBindTabPopAnimation] = useState(false);
   const [showBindTabShimmer, setShowBindTabShimmer] = useState(false);
   const bindTabShimmerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const bindTabShimmerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevHasLock = useRef(false);
+  const [desiredBindView, setDesiredBindView] = useState<BindView | null>(null);
 
   const targetRegistryAddress = useMemo(() => {
     if (chain?.id && TOKEN_REGISTRY_ADDRESSES[chain.id]) {
@@ -587,10 +590,9 @@ function App() {
     walletConnected && chain?.id !== undefined && chain.id !== expectedChainId;
   const environmentReady = !networkMismatch;
   const connectComplete = Boolean(walletConnected && environmentReady);
-  const hyprOwnedWei = hyprOwned?.amount_raw_wei ? BigInt(hyprOwned.amount_raw_wei) : 0n;
   const lockedWei = lockDetails?.amount_raw_wei ? BigInt(lockDetails.amount_raw_wei) : 0n;
   const hasBalanceData = hyprOwned !== null;
-  const hasHyprHoldings = hyprOwnedWei > 0n || lockedWei > 0n;
+  const hasHyprHoldings = (hyprOwned?.amount_raw_wei ? BigInt(hyprOwned.amount_raw_wei) : 0n) > 0n || lockedWei > 0n;
   const lockAllowanceWei = tokeregistryAllowance?.amount_raw_wei
     ? BigInt(tokeregistryAllowance.amount_raw_wei)
     : 0n;
@@ -601,11 +603,17 @@ function App() {
     environmentReady &&
     hasBalanceData &&
     !hasHyprHoldings;
-  // Always show content for browsing
-  const showContent = true;
-  const approveTabEnabled = true;
-  const lockTabEnabled = true;
-  const bindTabEnabled = true;
+  const showContent = connectComplete && !showHyprRequiredNotice && environmentReady;
+  const approveTabEnabled = showContent && !lockExpired;
+  const lockTabEnabled = showContent && (lockAllowanceWei > 0n || lockedWei > 0n);
+  const bindTabEnabled =
+    showContent && !lockExpired &&
+    ((availableToBind && availableToBind.amount_raw_wei !== '0') || bindings.length > 0);
+
+  const navigateToBindView = (view: BindView) => {
+    setDesiredBindView(view);
+    setActiveStep('bind');
+  };
 
   useEffect(() => {
     if (lockExpired && activeStep !== 'lock') {
@@ -614,14 +622,27 @@ function App() {
   }, [lockExpired, activeStep]);
 
   useEffect(() => {
-    if (!lockTabEnabled) {
-      setActiveStep('lock');
+    const pickFallback = () => {
+      if (lockTabEnabled) return 'lock';
+      if (approveTabEnabled) return 'approve';
+      if (bindTabEnabled) return 'bind';
+      return activeStep;
+    };
+
+    // If current tab is not enabled, fall back (prefer Lock when available).
+    if (activeStep === 'lock' && !lockTabEnabled) {
+      setActiveStep(pickFallback());
+      return;
+    }
+    if (activeStep === 'approve' && !approveTabEnabled) {
+      setActiveStep(pickFallback());
       return;
     }
     if (activeStep === 'bind' && !bindTabEnabled) {
-      setActiveStep('lock');
+      setActiveStep(pickFallback());
+      return;
     }
-  }, [lockTabEnabled, bindTabEnabled, activeStep]);
+  }, [lockTabEnabled, bindTabEnabled, approveTabEnabled, activeStep]);
 
   useEffect(() => {
     if (connectComplete) {
@@ -682,23 +703,25 @@ function App() {
       // Just approved - trigger pop animation
       setShowLockPopAnimation(true);
 
-      // Start shimmer after 3s, repeat every 5-10s
-      const timeout = setTimeout(() => {
+      // Start shimmer after 1s, repeat every 3s
+      lockShimmerTimeoutRef.current = setTimeout(() => {
         setShowLockShimmer(true);
         setTimeout(() => setShowLockShimmer(false), 800);
 
         lockShimmerIntervalRef.current = setInterval(() => {
           setShowLockShimmer(true);
           setTimeout(() => setShowLockShimmer(false), 800);
-        }, 5000 + Math.random() * 5000);
-      }, 3000);
-
-      return () => clearTimeout(timeout);
+        }, 3000);
+      }, 1000);
     }
 
     if (!shouldAnimate) {
       setShowLockPopAnimation(false);
       setShowLockShimmer(false);
+      if (lockShimmerTimeoutRef.current) {
+        clearTimeout(lockShimmerTimeoutRef.current);
+        lockShimmerTimeoutRef.current = null;
+      }
       if (lockShimmerIntervalRef.current) {
         clearInterval(lockShimmerIntervalRef.current);
         lockShimmerIntervalRef.current = null;
@@ -711,6 +734,7 @@ function App() {
   // Cleanup shimmer interval on unmount
   useEffect(() => {
     return () => {
+      if (lockShimmerTimeoutRef.current) clearTimeout(lockShimmerTimeoutRef.current);
       if (lockShimmerIntervalRef.current) clearInterval(lockShimmerIntervalRef.current);
     };
   }, []);
@@ -725,23 +749,25 @@ function App() {
       // Just got a lock - trigger pop animation
       setShowBindTabPopAnimation(true);
 
-      // Start shimmer after 3s, repeat every 5-10s
-      const timeout = setTimeout(() => {
+      // Start shimmer after 1s, repeat every 3s
+      bindTabShimmerTimeoutRef.current = setTimeout(() => {
         setShowBindTabShimmer(true);
         setTimeout(() => setShowBindTabShimmer(false), 800);
 
         bindTabShimmerIntervalRef.current = setInterval(() => {
           setShowBindTabShimmer(true);
           setTimeout(() => setShowBindTabShimmer(false), 800);
-        }, 5000 + Math.random() * 5000);
-      }, 3000);
-
-      return () => clearTimeout(timeout);
+        }, 3000);
+      }, 1000);
     }
 
     if (!shouldAnimate) {
       setShowBindTabPopAnimation(false);
       setShowBindTabShimmer(false);
+      if (bindTabShimmerTimeoutRef.current) {
+        clearTimeout(bindTabShimmerTimeoutRef.current);
+        bindTabShimmerTimeoutRef.current = null;
+      }
       if (bindTabShimmerIntervalRef.current) {
         clearInterval(bindTabShimmerIntervalRef.current);
         bindTabShimmerIntervalRef.current = null;
@@ -754,6 +780,7 @@ function App() {
   // Cleanup Bind tab shimmer interval on unmount
   useEffect(() => {
     return () => {
+      if (bindTabShimmerTimeoutRef.current) clearTimeout(bindTabShimmerTimeoutRef.current);
       if (bindTabShimmerIntervalRef.current) clearInterval(bindTabShimmerIntervalRef.current);
     };
   }, []);
@@ -855,50 +882,59 @@ function App() {
               targetRegistryAddress={targetRegistryAddress}
               refreshLockStatus={refreshLockStatusForWallet}
               hasExistingLock={lockedWei > 0n}
+              lockDetails={lockDetails}
+              onNavigateLock={() => setActiveStep('lock')}
+              onNavigateBind={navigateToBindView}
             />
           )}
 
-                      {activeStep === 'lock' && (
-                        <LockStep
-                          connectComplete={connectComplete}
-                          nodeId={nodeId}
-                          ownerAddress={ownerAddress}
-                          lockDetails={lockDetails}
-                          hyprOwned={hyprOwned}
-                          hyprApproved={hyprApproved}
-                          lockAllowance={tokeregistryAllowance}
-                          availableToBind={availableToBind}
-                          hyprTokenAddress={hyprTokenAddress}
-                          lastError={lastError}
-                          isLoading={isLoading}
-                          refreshLockStatus={refreshLockStatusForWallet}
-                          walletConnected={walletConnected}
-                          walletAddress={address}
-                          targetRegistryAddress={targetRegistryAddress}
-                          minLockDurationSeconds={minLockDurationSeconds}
-                          onLockUpdated={handleLockUpdated}
-                          isMobile={isMobile}
-                        />
-                      )}
+          {activeStep === 'lock' && (
+            <LockStep
+              connectComplete={connectComplete}
+              nodeId={nodeId}
+              ownerAddress={ownerAddress}
+              lockDetails={lockDetails}
+              hyprOwned={hyprOwned}
+              hyprApproved={hyprApproved}
+              lockAllowance={tokeregistryAllowance}
+              availableToBind={availableToBind}
+              hyprTokenAddress={hyprTokenAddress}
+              lastError={lastError}
+              isLoading={isLoading}
+              refreshLockStatus={refreshLockStatusForWallet}
+              walletConnected={walletConnected}
+              walletAddress={address}
+              targetRegistryAddress={targetRegistryAddress}
+              minLockDurationSeconds={minLockDurationSeconds}
+              onLockUpdated={handleLockUpdated}
+              isMobile={isMobile}
+              hasBindings={bindings.length > 0}
+              onNavigateBind={navigateToBindView}
+              bindTabPop={showBindTabPopAnimation}
+              bindTabShimmer={showBindTabShimmer}
+            />
+          )}
 
-                      {activeStep === 'bind' && (
-                        <BindStep
-                          connectComplete={connectComplete}
-                          walletConnected={walletConnected}
-                          walletAddress={address}
+      {activeStep === 'bind' && (
+        <BindStep
+          connectComplete={connectComplete}
+          walletConnected={walletConnected}
+          walletAddress={address}
                           targetRegistryAddress={targetRegistryAddress}
                           availableToBind={availableToBind}
                           lockDetails={lockDetails}
                           bindings={bindings}
                           refreshLockStatus={refreshLockStatusForWallet}
                           minLockDurationSeconds={minLockDurationSeconds}
-                          lockUpdateNonce={lockUpdateNonce}
-                          isMobile={isMobile}
-                          activeStep={activeStep}
-                          hasBoundAnything={hasBoundAnything}
-                          onBindSuccess={markHasBound}
-                        />
-                      )}
+          lockUpdateNonce={lockUpdateNonce}
+          isMobile={isMobile}
+          activeStep={activeStep}
+          hasBoundAnything={hasBoundAnything}
+          onBindSuccess={markHasBound}
+          desiredBindView={desiredBindView}
+          onConsumeDesiredBindView={() => setDesiredBindView(null)}
+        />
+      )}
                     </>
                   )}
                 </main>
@@ -943,6 +979,10 @@ interface LockStepProps {
   minLockDurationSeconds: number;
   onLockUpdated: () => void;
   isMobile: boolean;
+  hasBindings: boolean;
+  onNavigateBind: (view: BindView) => void;
+  bindTabPop: boolean;
+  bindTabShimmer: boolean;
 }
 
 const LockStep = ({
@@ -964,6 +1004,10 @@ const LockStep = ({
   minLockDurationSeconds,
   onLockUpdated,
   isMobile,
+  hasBindings,
+  onNavigateBind,
+  bindTabPop,
+  bindTabShimmer,
 }: LockStepProps) => {
   const [amountInput, setAmountInput] = useState('');
   const [durationInputs, setDurationInputs] = useState<DurationInputValues>(() =>
@@ -1005,8 +1049,7 @@ const LockStep = ({
 
   const durationParts = useMemo(() => inputsToDurationParts(durationInputs), [durationInputs]);
   const lockedAmountWei = lockDetails?.amount_raw_wei ? BigInt(lockDetails.amount_raw_wei) : 0n;
-  const hasExistingLock = lockedAmountWei > 0n;
-  const hyprOwnedWei = hyprOwned?.amount_raw_wei ? BigInt(hyprOwned.amount_raw_wei) : 0n;
+    const hasExistingLock = lockedAmountWei > 0n;
   const lockAvailableWei = lockAllowance?.amount_raw_wei ? BigInt(lockAllowance.amount_raw_wei) : 0n;
   const lockExpired = hasExistingLock && (lockDetails?.remaining_seconds ?? 0) === 0;
   useEffect(() => {
@@ -2081,13 +2124,6 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     }
   }, [hasExistingLock, lockExpired, resetLockEndDefaults]);
 
-  const handleShowApprovePanel = useCallback(() => {
-    setUserSetLockView(true);
-    setAmountInput('');
-    setLockView('manage');
-    resetLockEndDefaults();
-  }, [resetLockEndDefaults]);
-
   const handleShowDetailsPanel = useCallback(() => {
     if (hasExistingLock) {
       setUserSetLockView(true);
@@ -2129,7 +2165,35 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                     {isWithdrawPending || isWithdrawConfirming ? <span className="spinner" /> : 'Withdraw'}
                   </button>
                 )}
+                {lockExpired && (
+                  <div className="inline-hint">
+                    HYPR must be withdrawn from an expired lock to permit creation of a new lock.
+                  </div>
+                )}
               </div>
+              {!lockExpired && (
+                <div className="lock-detail-actions">
+                  {!hasBindings ? (
+                    <button
+                      type="button"
+                      className={`secondary-button${bindTabPop ? ' bind-button-pop' : ''}${bindTabShimmer ? ' bind-button-shimmer' : ''}`}
+                      style={{ width: 'fit-content', fontWeight: 700 }}
+                      onClick={() => onNavigateBind('create')}
+                    >
+                      Create binding
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="secondary-button ghost"
+                      style={{ width: 'fit-content' }}
+                      onClick={() => onNavigateBind('details')}
+                    >
+                      View bindings
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="lock-detail-actions">
                 {!lockExpired && (
                   <button type="button" className="secondary-button" style={{ width: 'fit-content' }} onClick={handleShowExtendPanel}>
@@ -2144,16 +2208,6 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                     onClick={handleShowManagePanel}
                   >
                     Add HYPR to lock
-                  </button>
-                )}
-                {!lockExpired && lockAvailableWei === 0n && hyprOwnedWei > 0n && (
-                  <button
-                    type="button"
-                    className="secondary-button ghost"
-                    style={{ marginTop: '0.5rem', width: 'fit-content' }}
-                    onClick={handleShowApprovePanel}
-                  >
-                    Approve HYPR to add to lock
                   </button>
                 )}
                 {txNotice && (
@@ -2480,6 +2534,9 @@ interface ApproveStepProps {
   targetRegistryAddress: `0x${string}`;
   refreshLockStatus: () => Promise<void>;
   hasExistingLock: boolean;
+  lockDetails: LockDetailsView | null;
+  onNavigateLock: () => void;
+  onNavigateBind: (view: BindView) => void;
 }
 
 const ApproveStep = ({
@@ -2491,17 +2548,26 @@ const ApproveStep = ({
   targetRegistryAddress,
   refreshLockStatus,
   hasExistingLock,
+  lockDetails,
+  onNavigateLock,
+  onNavigateBind,
 }: ApproveStepProps) => {
   const [amountInput, setAmountInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [successHash, setSuccessHash] = useState<`0x${string}` | null>(null);
   const [isRevoking, setIsRevoking] = useState(false);
+  const [showCreateLockPop, setShowCreateLockPop] = useState(false);
+  const [showCreateLockShimmer, setShowCreateLockShimmer] = useState(false);
+  const createLockShimmerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const createLockShimmerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const prevCreateLockAnim = useRef(false);
 
   const hyprOwnedWei = hyprOwned?.amount_raw_wei ? BigInt(hyprOwned.amount_raw_wei) : 0n;
   const lockAvailableWei = lockAllowance?.amount_raw_wei ? BigInt(lockAllowance.amount_raw_wei) : 0n;
   const amountProvided = amountInput !== '';
   const hasExistingApproval = lockAvailableWei > 0n;
   const hasActiveLock = hasExistingLock;
+  const lockedAmountFormatted = lockDetails?.amount_formatted_hypr ?? '0';
 
   const {
     data: allowanceTxHash,
@@ -2535,6 +2601,58 @@ const ApproveStep = ({
       setIsRevoking(false);
     }
   }, [allowanceWriteError]);
+
+  useEffect(() => {
+    const shouldAnimate = hasExistingApproval && !hasActiveLock && walletConnected;
+    if (shouldAnimate && !prevCreateLockAnim.current) {
+      setShowCreateLockPop(true);
+      createLockShimmerTimeoutRef.current = setTimeout(() => {
+        setShowCreateLockShimmer(true);
+        setTimeout(() => setShowCreateLockShimmer(false), 800);
+        createLockShimmerIntervalRef.current = setInterval(() => {
+          setShowCreateLockShimmer(true);
+          setTimeout(() => setShowCreateLockShimmer(false), 800);
+        }, 3000);
+      }, 1000);
+    }
+    if (!shouldAnimate) {
+      setShowCreateLockPop(false);
+      setShowCreateLockShimmer(false);
+      if (createLockShimmerTimeoutRef.current) {
+        clearTimeout(createLockShimmerTimeoutRef.current);
+        createLockShimmerTimeoutRef.current = null;
+      }
+      if (createLockShimmerIntervalRef.current) {
+        clearInterval(createLockShimmerIntervalRef.current);
+        createLockShimmerIntervalRef.current = null;
+      }
+    }
+    prevCreateLockAnim.current = shouldAnimate;
+    return () => {
+      if (createLockShimmerTimeoutRef.current) {
+        clearTimeout(createLockShimmerTimeoutRef.current);
+        createLockShimmerTimeoutRef.current = null;
+      }
+      if (createLockShimmerIntervalRef.current) {
+        clearInterval(createLockShimmerIntervalRef.current);
+        createLockShimmerIntervalRef.current = null;
+      }
+    };
+  }, [hasExistingApproval, hasActiveLock, walletConnected]);
+
+  useEffect(() => {
+    if (error) {
+      const timeout = setTimeout(() => setError(null), 10_000);
+      return () => clearTimeout(timeout);
+    }
+  }, [error]);
+
+  useEffect(() => {
+    if (successHash) {
+      const timeout = setTimeout(() => setSuccessHash(null), 10_000);
+      return () => clearTimeout(timeout);
+    }
+  }, [successHash]);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -2619,76 +2737,132 @@ const ApproveStep = ({
     !amountProvided ||
     Number(amountInput) <= 0;
 
+  const approveFormClass = `lock-form${hasExistingApproval ? ' lock-form-plain' : ''}`;
+
   return (
     <section className="step-panel approve-step">
-      <form className="lock-form" onSubmit={handleSubmit}>
+      <form className={approveFormClass} onSubmit={handleSubmit}>
         <div className="form-header">
           <div className="form-header-text">
-            <h3>Approve HYPR for locking</h3>
-            <p className="form-subtitle">
-              {hasExistingApproval
-                ? hasActiveLock
-                  ? 'Approving HYPR permits the HYPR Registry to lock up to the amount you have designated. You may revoke or adjust your existing approved amount.'
-                  : 'Approving HYPR permits the HYPR Registry to lock up to the amount you have designated. You may revoke or adjust your existing approved amount, or you may proceed to the Lock tab to lock your HYPR.'
-                : 'Approving HYPR permits the HYPR Registry to lock up to the amount you have designated. Do not approve more than you intend to lock.'}
-            </p>
+            {!hasExistingApproval ? (
+              <>
+                <h3>{hasActiveLock ? 'Approve HYPR to enable additional locking' : 'Approve HYPR to enable locking'}</h3>
+                <p className="form-subtitle">
+                  {hasActiveLock ? 'Approve only as much as you intend to add to your lock.' : 'Approve only as much as you intend to lock.'}
+                </p>
+              </>
+            ) : null}
           </div>
         </div>
 
         {lockAvailableWei > 0n && (
-          <div className="approve-status">
-            <div className="approve-status-row">
-              <span className="status-label">Current approval:</span>
-              <span className="status-value">{lockAllowance?.amount_formatted_hypr ?? '0'}</span>
-            </div>
-            <div className="approve-status-row">
+          <>
+            <div className="lock-card">
+              <div className="lock-detail-stat">
+                <span className="lock-card-label">
+                  {hasActiveLock ? 'Amount approved to add to lock' : 'Amount approved to lock'}
+                </span>
+                <span className="lock-card-value">{lockAllowance?.amount_formatted_hypr ?? '0'}</span>
+              </div>
+              {hasActiveLock && (
+                <div className="lock-detail-stat" style={{ marginTop: '0.35rem' }}>
+                  <span className="lock-card-label">Amount already locked</span>
+                  <span className="lock-card-value">{lockedAmountFormatted}</span>
+                </div>
+              )}
+              <div className="lock-detail-actions">
+                {!hasActiveLock && (
               <button
                 type="button"
-                className="secondary-button"
+                className={`secondary-button${showCreateLockPop ? ' bind-button-pop' : ''}${showCreateLockShimmer ? ' bind-button-shimmer' : ''}`}
+                style={{ width: 'fit-content', fontWeight: 700 }}
+                onClick={() => onNavigateLock()}
+              >
+                Create lock
+              </button>
+            )}
+            {hasActiveLock && (
+              <button
+                type="button"
+                className="secondary-button ghost"
+                style={{ width: 'fit-content' }}
+                onClick={() => onNavigateLock()}
+              >
+                View lock
+              </button>
+            )}
+              <button
+                type="button"
+                className="secondary-button ghost"
+                style={{ width: 'fit-content' }}
                 disabled={!walletConnected || isAllowancePending || isAllowanceConfirming}
                 onClick={handleRevoke}
               >
                 {isRevoking || isAllowancePending || isAllowanceConfirming ? (
                   <span className="spinner" />
                 ) : (
-                  'Revoke'
-                )}
-              </button>
+                  'Revoke approval'
+                  )}
+                </button>
+              </div>
             </div>
-          </div>
+            <div className="lock-card">
+              <h3 className="lock-card-title">Update approval</h3>
+              <div className="input-grid">
+                <label className="input-field">
+                  <span>
+                    Approved amount {hyprOwned ? `(up to ${hyprOwned.amount_formatted_hypr})` : '(HYPR)'}
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.000000000000000001"
+                    value={amountInput}
+                    onChange={(event) => setAmountInput(event.target.value)}
+                    placeholder="0.0"
+                    required
+                    disabled={!walletConnected}
+                  />
+                </label>
+              </div>
+              <div className="form-actions">
+                <button type="submit" className="secondary-button" disabled={approveButtonDisabled}>
+                  {isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Update'}
+                </button>
+              </div>
+            </div>
+          </>
         )}
 
-        <div className="input-grid">
-          <label className="input-field">
-            <span>
-              {lockAvailableWei > 0n
-                ? `Updated amount to approve ${hyprOwned ? `(up to ${hyprOwned.amount_formatted_hypr})` : '(HYPR)'}`
-                : `Amount to approve ${hyprOwned ? `(up to ${hyprOwned.amount_formatted_hypr})` : '(HYPR)'}`}
-            </span>
-            <input
-              type="number"
-              min="0"
-              step="0.000000000000000001"
-              value={amountInput}
-              onChange={(event) => setAmountInput(event.target.value)}
-              placeholder="0.0"
-              required
-              disabled={!walletConnected}
-            />
-          </label>
-        </div>
+        {lockAvailableWei === 0n && (
+          <>
+            <div className="input-grid">
+              <label className="input-field">
+                <span>
+                  {hasActiveLock
+                    ? `Amount to approve ${hyprOwned ? `(up to ${hyprOwned.amount_formatted_hypr})` : '(HYPR)'}`
+                    : `Amount to approve ${hyprOwned ? `(up to ${hyprOwned.amount_formatted_hypr})` : '(HYPR)'}`}
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.000000000000000001"
+                  value={amountInput}
+                  onChange={(event) => setAmountInput(event.target.value)}
+                  placeholder="0.0"
+                  required
+                  disabled={!walletConnected}
+                />
+              </label>
+            </div>
 
-        <div className="form-actions">
-          <button type="submit" className="secondary-button" disabled={approveButtonDisabled}>
-            {isAllowancePending || isAllowanceConfirming ? (
-              <span className="spinner" />
-            ) : hasExistingApproval ? (
-              'Update'
-            ) : (
-              'Submit'
-            )}
-          </button>
-        </div>
+            <div className="form-actions">
+              <button type="submit" className="secondary-button" disabled={approveButtonDisabled}>
+                {isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Submit'}
+              </button>
+            </div>
+          </>
+        )}
 
         {error && (
           <div className="inline-error">
@@ -2720,6 +2894,8 @@ interface BindStepProps {
   activeStep: StepId;
   hasBoundAnything: boolean;
   onBindSuccess: () => void;
+  desiredBindView: BindView | null;
+  onConsumeDesiredBindView: () => void;
 }
 
 const BindStep = ({
@@ -2737,6 +2913,8 @@ const BindStep = ({
   activeStep,
   hasBoundAnything,
   onBindSuccess,
+  desiredBindView,
+  onConsumeDesiredBindView,
 }: BindStepProps) => {
   const [dstNameInput, setDstNameInput] = useState('');
   const [transferAmountInput, setTransferAmountInput] = useState('');
@@ -2753,7 +2931,7 @@ const BindStep = ({
   const [transferMobileDateChoice, setTransferMobileDateChoice] = useState<string | null>(null);
   const [transferError, setTransferError] = useState<BannerMessage | null>(null);
   const [transferSuccessHash, setTransferSuccessHash] = useState<`0x${string}` | null>(null);
-  const [bindView, setBindView] = useState<'details' | 'create' | 'add' | 'extend' | 'add-hypr'>(
+  const [bindView, setBindView] = useState<BindView>(
     bindings.length > 0 ? 'details' : 'create',
   );
   const [userSetBindView, setUserSetBindView] = useState(false);
@@ -2847,6 +3025,24 @@ const BindStep = ({
       setAddHyprBindingName(null);
     }
   }, [bindView, hasBindings, userSetBindView]);
+
+  useEffect(() => {
+    if (!desiredBindView) return;
+    setBindView(desiredBindView);
+    setUserSetBindView(true);
+    setExtendBindingName(null);
+    setAddHyprBindingName(null);
+    onConsumeDesiredBindView();
+  }, [desiredBindView, onConsumeDesiredBindView]);
+
+  useEffect(() => {
+    if (!desiredBindView) return;
+    setBindView(desiredBindView);
+    setUserSetBindView(true);
+    setExtendBindingName(null);
+    setAddHyprBindingName(null);
+    onConsumeDesiredBindView();
+  }, [desiredBindView, onConsumeDesiredBindView]);
 
   useEffect(() => {
     if (transferWriteError) {
@@ -3988,6 +4184,8 @@ interface BottomTabsProps {
   bindPopAnimation: boolean;
   bindShimmer: boolean;
 }
+
+type BindView = 'details' | 'create' | 'add' | 'extend' | 'add-hypr';
 
 const BottomTabs = ({
   steps,
