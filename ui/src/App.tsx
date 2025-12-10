@@ -1128,7 +1128,6 @@ const LockStep = ({
     () => durationPartsToSeconds(durationParts),
     [durationParts],
   );
-  const minDurationSecondsBigInt = BigInt(minLockDurationSeconds);
   const lockEndDateMin = useMemo(
     () => new Date((nowSeconds + minLockDurationSeconds) * 1000),
     [nowSeconds, minLockDurationSeconds],
@@ -1137,11 +1136,24 @@ const LockStep = ({
     () => new Date((nowSeconds + MAX_LOCK_DURATION_SECONDS) * 1000),
     [nowSeconds],
   );
-  const extendMinMillis = useMemo(() => {
-    const unlockMs = lockDetails?.unlock_timestamp ? lockDetails.unlock_timestamp * 1000 : 0;
-    const unlockPlusBuffer = unlockMs > 0 ? unlockMs + 60_000 : 0;
-    return Math.max(lockEndDateMin.getTime(), unlockPlusBuffer);
-  }, [lockDetails, lockEndDateMin]);
+  const extendMinDurationSeconds = useMemo(() => {
+    if (!hasExistingLock || !lockDetails?.unlock_timestamp) return minLockDurationSeconds;
+    const remaining = Math.max(0, lockDetails.unlock_timestamp - nowSeconds);
+    // Clamp up to the protocol min; if the lock is close to expiring, min becomes the global minimum.
+    return Math.max(minLockDurationSeconds, remaining + 1);
+  }, [hasExistingLock, lockDetails?.unlock_timestamp, minLockDurationSeconds, nowSeconds]);
+  // Validation min for extend gets a small 2s tolerance to avoid flicker around the live floor
+  const extendValidationMinSeconds = useMemo(
+    () => Math.max(0, extendMinDurationSeconds - 2),
+    [extendMinDurationSeconds],
+  );
+  const extendMinMillis = useMemo(
+    () => nowMs + extendMinDurationSeconds * 1000,
+    [extendMinDurationSeconds, nowMs],
+  );
+  const minDurationSecondsForView =
+    lockView === 'extend' ? extendValidationMinSeconds : minLockDurationSeconds;
+  const minDurationSecondsBigInt = BigInt(minDurationSecondsForView);
   const applyLockMobileDuration = useCallback(
     (seconds: number) => {
       const next = new Date(Date.now() + seconds * 1000);
@@ -1149,10 +1161,12 @@ const LockStep = ({
       setLockEndDateInput(next);
       setLockEndTimeInput(formatTimeFromDate(next));
       setLockEndTimeDirty(true);
-      setLockDurationDirty(true);
+      const isExtendMin =
+        hasExistingLock && lockView === 'extend' && seconds === extendMinDurationSeconds;
+      setLockDurationDirty(!isExtendMin);
       setDurationInputs(durationInputsFromSeconds(BigInt(seconds)));
     },
-    [formatTimeFromDate],
+    [formatTimeFromDate, hasExistingLock, lockView, extendMinDurationSeconds],
   );
   // Removed: legacy default end-date based on DEFAULT_DURATION_SECONDS (1 month)
   const lockEndDateDisplayMin = useMemo(
@@ -1174,7 +1188,8 @@ const LockStep = ({
   );
   const lockEndDateDurationSeconds = secondsUntilDate(lockEndDateInput, Math.floor(Date.now() / 1000));
   // Duration is source of truth for new locks; use end-date only when a lock already exists (extend/add)
-  const effectiveMode: DurationMode = hasExistingLock ? 'end-date' : 'duration';
+  const effectiveMode: DurationMode =
+    lockView === 'extend' ? 'duration' : hasExistingLock ? 'end-date' : 'duration';
   const [lockEndTimeInput, setLockEndTimeInput] = useState('00:00:00');
   const [lockEndTimeDirty, setLockEndTimeDirty] = useState(false);
   useEffect(() => {
@@ -1194,16 +1209,67 @@ const LockStep = ({
     }
   }, [lockEndDateInput, lockEndTimeDirty, lockEndTimeInput]);
   const selectedLockDurationSeconds =
-    effectiveMode === 'duration'
-      ? lockDurationSecondsFromInputs
-      : lockEndDateDurationSeconds ?? 0n;
+    lockView === 'extend' && hasExistingLock && !lockDurationDirty
+      ? BigInt(extendMinDurationSeconds)
+      : effectiveMode === 'duration'
+        ? lockDurationSecondsFromInputs
+        : lockEndDateDurationSeconds ?? 0n;
+  // If user chooses the live MIN duration in extend mode, keep it in sync (do not mark dirty)
+  useEffect(() => {
+    if (!hasExistingLock) return;
+    if (lockView !== 'extend') return;
+    const minSecondsBigInt = BigInt(extendMinDurationSeconds);
+    if (selectedLockDurationSeconds === minSecondsBigInt && lockDurationDirty) {
+      setLockDurationDirty(false);
+      setDurationInputs(durationInputsFromSeconds(minSecondsBigInt));
+    }
+  }, [
+    extendMinDurationSeconds,
+    hasExistingLock,
+    lockDurationDirty,
+    lockView,
+    selectedLockDurationSeconds,
+  ]);
+  // Keep extend view synced to the live minimum duration unless the user has edited the duration inputs.
+  useEffect(() => {
+    if (!hasExistingLock) return;
+    if (lockView !== 'extend') return;
+    if (lockDurationDirty) return;
+    const minSecondsBigInt = BigInt(extendMinDurationSeconds);
+    if (selectedLockDurationSeconds !== minSecondsBigInt) {
+      setDurationInputs(durationInputsFromSeconds(minSecondsBigInt));
+    }
+  }, [
+    extendMinDurationSeconds,
+    hasExistingLock,
+    lockDurationDirty,
+    lockView,
+    selectedLockDurationSeconds,
+  ]);
   useEffect(() => {
     if (hasExistingLock) return;
     if (displayLockView !== 'manage') return;
     if (selectedLockDurationSeconds <= 0n) return;
+    let next: Date;
+    if (
+      lockView === 'extend' &&
+      hasExistingLock &&
+      !lockDurationDirty &&
+      lockDetails?.unlock_timestamp
+    ) {
+      next = new Date((lockDetails.unlock_timestamp + 1) * 1000);
+    } else {
+      next = new Date(nowMs + Number(selectedLockDurationSeconds) * 1000);
+    }
+    setLockEndDateInput(next);
+  }, [hasExistingLock, lockView, lockDurationDirty, displayLockView, selectedLockDurationSeconds, nowMs, lockDetails?.unlock_timestamp]);
+  useEffect(() => {
+    if (!hasExistingLock) return;
+    if (lockView !== 'extend') return;
+    if (selectedLockDurationSeconds <= 0n) return;
     const next = new Date(nowMs + Number(selectedLockDurationSeconds) * 1000);
     setLockEndDateInput(next);
-  }, [hasExistingLock, displayLockView, selectedLockDurationSeconds, nowMs]);
+  }, [hasExistingLock, lockView, selectedLockDurationSeconds, nowMs]);
   const {
     data: allowanceTxHash,
     error: allowanceWriteError,
@@ -1521,10 +1587,6 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
       pushManageError('Enter a positive duration.');
       return;
     }
-    if (selectedLockDurationSeconds < minDurationSecondsBigInt) {
-      pushManageError(`Duration must be at least ${formatDurationSeconds(minLockDurationSeconds)}.`);
-      return;
-    }
     if (selectedLockDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
       pushManageError(`Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`);
       return;
@@ -1668,10 +1730,15 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     lockDetails && hasExistingLock ? BigInt(lockDetails.amount_raw_wei) : 0n;
   const existingDurationSeconds =
     lockDetails && hasExistingLock ? BigInt(lockDetails.remaining_seconds ?? 0) : 0n;
+  // Use a live remaining-seconds view so validation stays in sync with the ticking lock
+  const currentRemainingSeconds = useMemo(() => {
+    if (!hasExistingLock || !lockDetails?.unlock_timestamp) return existingDurationSeconds;
+    return BigInt(Math.max(0, lockDetails.unlock_timestamp - nowSeconds));
+  }, [existingDurationSeconds, hasExistingLock, lockDetails?.unlock_timestamp, nowSeconds]);
   const zeroAmountExtendingOnly =
-    hasExistingLock && additionalAmountWei === 0n && existingDurationSeconds > 0n;
+    hasExistingLock && additionalAmountWei === 0n && currentRemainingSeconds > 0n;
   const durationLessThanExisting =
-    zeroAmountExtendingOnly && selectedLockDurationSeconds < existingDurationSeconds;
+    zeroAmountExtendingOnly && selectedLockDurationSeconds < currentRemainingSeconds;
 
   const requiredDurationSeconds = useMemo(() => {
     if (!hasExistingLock || additionalAmountWei <= 0n) {
@@ -1680,7 +1747,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     return (
       calculateRequiredAdditionalDuration(
         existingAmountWei,
-        existingDurationSeconds,
+        currentRemainingSeconds,
         additionalAmountWei,
         selectedLockDurationSeconds,
       ) ?? selectedLockDurationSeconds
@@ -1688,7 +1755,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
   }, [
     additionalAmountWei,
     existingAmountWei,
-    existingDurationSeconds,
+    currentRemainingSeconds,
     hasExistingLock,
     selectedLockDurationSeconds,
   ]);
@@ -1696,13 +1763,18 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
   const addWeightedMinDurationSeconds = useMemo(() => {
     if (!hasExistingLock || lockView !== 'manage') return null;
     const target = BigInt(minLockDurationSeconds);
-    const weighted = weightedDurationSeconds(existingAmountWei, existingDurationSeconds, additionalAmountWei, target);
+    const weighted = weightedDurationSeconds(
+      existingAmountWei,
+      currentRemainingSeconds,
+      additionalAmountWei,
+      target,
+    );
     if (!weighted) return null;
     return weighted < target ? target : weighted;
   }, [
     additionalAmountWei,
+    currentRemainingSeconds,
     existingAmountWei,
-    existingDurationSeconds,
     hasExistingLock,
     lockView,
     minLockDurationSeconds,
@@ -1819,15 +1891,16 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     lockView === 'extend'
       ? extendMinMillis
       : lockView === 'manage' && hasExistingLock
-    ? Math.max(addWeightedMinMsRaw ?? extendMinMillis, extendMinMillis)
-    : lockEndDateMin.getTime();
+        ? Math.max(addWeightedMinMsRaw ?? extendMinMillis, extendMinMillis)
+        : lockEndDateMin.getTime();
   const hasValidEndDate =
     lockDurationMode === 'duration'
-      ? true
+      ? selectedLockDurationSeconds <= BigInt(MAX_LOCK_DURATION_SECONDS)
       : Boolean(lockEndDateDurationSeconds) &&
         Boolean(lockEndDateInput) &&
         lockEndDateInput!.getTime() >= minEndDateForValidationMs &&
-        lockEndDateInput!.getTime() <= lockEndDateDisplayMax.getTime();
+        lockEndDateInput!.getTime() <= lockEndDateDisplayMax.getTime() &&
+        selectedLockDurationSeconds <= BigInt(MAX_LOCK_DURATION_SECONDS);
   const lockCustomSetDisabled = useMemo(() => {
     if (!lockCustomModalDate || !lockCustomModalTime) return true;
     const candidate = new Date(`${lockCustomModalDate}T${lockCustomModalTime}:00`);
@@ -1899,6 +1972,26 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     setDiagModal({ title: 'Lock diagnostics', rows });
   };
 
+  const lockMinSecondsForOptions = useMemo(() => {
+    if (lockView === 'extend' && hasExistingLock) {
+      return extendMinDurationSeconds;
+    }
+    const minMs =
+      lockView === 'manage' && hasExistingLock
+        ? Math.max(addWeightedMinMsRaw ?? extendMinMillis, extendMinMillis)
+        : lockEndDateMin.getTime();
+    // Use a 60s cushion above the live min to avoid edge/rounding drift vs validation min
+    return Math.max(0, Math.round((minMs - nowMs) / 1000) + 60);
+  }, [
+    addWeightedMinMsRaw,
+    extendMinDurationSeconds,
+    extendMinMillis,
+    hasExistingLock,
+    lockEndDateMin,
+    lockView,
+    nowMs,
+  ]);
+
   const lockMobileDurationOptions = useMemo(() => {
     if (isMobile && lockView === 'manage' && hasExistingLock) {
       const baseSeconds = existingDurationSeconds;
@@ -1919,16 +2012,16 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
         { label: '-1 week', seconds: 1 * SECONDS_PER_WEEK },
         { label: '-3 days', seconds: 3 * SECONDS_PER_DAY },
       ];
-      const nowMs = Date.now();
-    const minOptionMs = addDynamicMinMsBuffered ?? minEndDateForValidationMs + TWENTY_FOUR_HOURS_MS;
-    const maxOptionMs = currentExpiryMs ?? maxMsForView;
+      const nowMsLocal = nowMs;
+      const minOptionMs = addDynamicMinMsBuffered ?? minEndDateForValidationMs + TWENTY_FOUR_HOURS_MS;
+      const maxOptionMs = currentExpiryMs ?? maxMsForView;
       const candidates: { label: string; seconds: number; value: string }[] = [];
       // MIN duration entry (buffered min)
-      const minSeconds = Math.max(0, Math.round((minOptionMs - nowMs) / 1000));
+      const minSeconds = Math.max(0, Math.round((minOptionMs - nowMsLocal) / 1000));
       candidates.push({ label: 'MIN duration', seconds: minSeconds, value: '__min__' });
       deltas.forEach((delta) => {
         const candidateSeconds = Number(baseSeconds > BigInt(delta.seconds) ? baseSeconds - BigInt(delta.seconds) : 0n);
-        const expiryMs = nowMs + candidateSeconds * 1000;
+        const expiryMs = nowMsLocal + candidateSeconds * 1000;
         if (expiryMs >= minOptionMs && expiryMs <= maxOptionMs) {
           candidates.push({ label: delta.label, seconds: candidateSeconds, value: delta.label });
         }
@@ -1948,8 +2041,8 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
       return Array.from(dedup.values());
     }
     if (!isMobile) return MOBILE_DURATION_OPTIONS;
-    const nowMsLocal = Date.now();
-    const minSeconds = Math.max(0, Math.round((minEndDateForValidationMs - nowMsLocal) / 1000));
+    const minSeconds = lockMinSecondsForOptions;
+    const nowMsLocal = nowMs;
     const maxSeconds = Math.max(minSeconds, Math.round((maxMsForView - nowMsLocal) / 1000));
     const currentDurationSeconds =
       hasExistingLock && lockDetails?.unlock_timestamp
@@ -1993,6 +2086,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     lockView,
     maxMsForView,
     minEndDateForValidationMs,
+    nowMs,
     nowSeconds,
   ]);
   const lockExpiryHintLabel = useMemo(() => {
@@ -2078,6 +2172,34 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     exceedsLockAvailable ||
     !hasValidEndDate ||
     durationLessThanExisting;
+  const lockDebugStatus = useMemo(
+    () => ({
+      walletConnected,
+      isManagePending,
+      isManageConfirming,
+      isAllowancePending,
+      isAllowanceConfirming,
+      amountProvided,
+      allowZeroAmount,
+      amountValue,
+      exceedsLockAvailable,
+      hasValidEndDate,
+      durationLessThanExisting,
+    }),
+    [
+      walletConnected,
+      isManagePending,
+      isManageConfirming,
+      isAllowancePending,
+      isAllowanceConfirming,
+      amountProvided,
+      allowZeroAmount,
+      amountValue,
+      exceedsLockAvailable,
+      hasValidEndDate,
+      durationLessThanExisting,
+    ],
+  );
   const showLockFormContent = isMobile
     ? amountProvided && amountValue > 0 && !exceedsLockAvailable
     : amountProvided &&
@@ -2484,6 +2606,9 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
               {manageError.text}
             </div>
           )}
+          <div className="lock-card-sub">
+            Debug: {JSON.stringify(lockDebugStatus)}
+          </div>
           {manageSuccessHash && (
             <div className="inline-success" ref={manageSuccessRef}>
               Lock updated! Tx {shortHash(manageSuccessHash)}
