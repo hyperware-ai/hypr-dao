@@ -3096,7 +3096,7 @@ const BindStep = ({
     createDefaultDurationInputsAtLeastMin(minLockDurationSeconds),
   );
   const [transferDurationDirty, setTransferDurationDirty] = useState(false);
-  const [transferDurationMode, setTransferDurationMode] = useState<DurationMode>('end-date');
+  const [transferDurationMode, setTransferDurationMode] = useState<DurationMode>('duration');
   const [transferEndDateInput, setTransferEndDateInput] = useState<Date | null>(null);
   const [transferEndTimeInput, setTransferEndTimeInput] = useState('00:00:00');
   const [transferEndTimeDirty, setTransferEndTimeDirty] = useState(false);
@@ -3135,15 +3135,16 @@ const BindStep = ({
 
   const applyTransferMobileDuration = useCallback(
     (seconds: number) => {
-      const next = new Date(Date.now() + seconds * 1000);
+      const nextDate = new Date(Date.now() + seconds * 1000);
       setTransferMobileDateChoice('');
-      setTransferEndDateInput(next);
-      setTransferEndTimeInput(formatTimeFromDate(next));
+      setTransferEndDateInput(nextDate);
+      setTransferEndTimeInput(formatTimeFromDate(nextDate));
       setTransferEndTimeDirty(true);
-      setTransferDurationDirty(true);
-      setTransferDurationMode('end-date');
+      setTransferDurationDirty(false);
+      setTransferDurationMode('duration');
+      setTransferDurationInputs(durationInputsFromSeconds(BigInt(seconds)));
     },
-    [],
+    [formatTimeFromDate],
   );
 
   const {
@@ -3249,8 +3250,7 @@ const BindStep = ({
     }
   }, [transferError]);
 
-  const transferNowSecondsRef = useRef(Math.floor(Date.now() / 1000));
-  const transferNowSeconds = transferNowSecondsRef.current;
+  const transferNowSeconds = Math.floor(nowMs / 1000);
   const minDurationSecondsBigInt = BigInt(minLockDurationSeconds);
   const transferEndDateMin = useMemo(
     () => new Date((transferNowSeconds + minLockDurationSeconds) * 1000),
@@ -3278,21 +3278,28 @@ const BindStep = ({
     // Ensure max is never below min so collapsed windows remain valid
     return Math.max(raw, effectiveTransferEndDateMinMs);
   }, [transferEndDateMax, effectiveTransferEndDateMinMs]);
+  const transferMinDurationSeconds = useMemo(() => {
+    // Ceil to avoid millisecond jitter from floor(nowMs/1000) vs nowMs
+    return Math.max(0, Math.ceil((effectiveTransferEndDateMinMs - nowMs) / 1000));
+  }, [effectiveTransferEndDateMinMs, nowMs]);
+  const transferMaxDurationSeconds = useMemo(() => {
+    // Floor so max never dips below min due to rounding jitter
+    return Math.max(0, Math.floor((effectiveTransferEndDateMaxMs - nowMs) / 1000));
+  }, [effectiveTransferEndDateMaxMs, nowMs]);
   const effectiveTransferEndDateDefault = useMemo(() => {
     if (bindView === 'add-hypr') return null;
     return new Date(effectiveTransferEndDateMaxMs);
   }, [bindView, effectiveTransferEndDateMaxMs]);
   const bindHintMinMs = useMemo(() => {
-    if (bindView === 'extend') return effectiveTransferEndDateMinMs;
-    if (bindView === 'add') return transferEndDateMin.getTime();
-    if (bindView === 'create') return transferEndDateMin.getTime();
+    if (bindView === 'extend') return nowMs + transferMinDurationSeconds * 1000;
+    if (bindView === 'add' || bindView === 'create') return nowMs + transferMinDurationSeconds * 1000;
     return 0;
-  }, [bindView, effectiveTransferEndDateMinMs, transferEndDateMin]);
+  }, [bindView, nowMs, transferMinDurationSeconds]);
   const bindHintMaxMs = useMemo(() => {
-    if (bindView === 'extend') return effectiveTransferEndDateMaxMs;
-    if (bindView === 'add' || bindView === 'create') return effectiveTransferEndDateMaxMs;
+    if (bindView === 'extend') return nowMs + transferMaxDurationSeconds * 1000;
+    if (bindView === 'add' || bindView === 'create') return nowMs + transferMaxDurationSeconds * 1000;
     return 0;
-  }, [bindView, effectiveTransferEndDateMaxMs]);
+  }, [bindView, nowMs, transferMaxDurationSeconds]);
   const openBindDiagnostics = () => {
     const actualMin = bindHintMinMs || null;
     const minDuration = bindHintMinMs || null;
@@ -3325,19 +3332,18 @@ const BindStep = ({
   const transferSpecialDateOptions = useMemo(() => buildSpecialDateOptions(), []);
   const transferMobileDurationOptions = useMemo(() => {
     if (!isMobile) return MOBILE_DURATION_OPTIONS;
-    const nowMs = Date.now();
-    const minSeconds = Math.max(0, Math.round((effectiveTransferEndDateMinMs - nowMs) / 1000));
-    const maxSeconds = Math.max(minSeconds, Math.round((effectiveTransferEndDateMaxMs - nowMs) / 1000));
+    const minSeconds = transferMinDurationSeconds;
+    const maxSeconds = Math.max(minSeconds, transferMaxDurationSeconds);
     const inRange = MOBILE_DURATION_OPTIONS.filter(
       (opt) => opt.seconds >= minSeconds && opt.seconds <= maxSeconds,
     );
     const withBounds: { label: string; seconds: number; value: string }[] = [
       { label: 'MIN duration', seconds: minSeconds, value: '__min__' },
       ...inRange,
-      { label: 'Lock duration', seconds: maxSeconds, value: '__max__' },
+      { label: 'MAX duration', seconds: maxSeconds, value: '__max__' },
     ];
     return withBounds;
-  }, [effectiveTransferEndDateMaxMs, effectiveTransferEndDateMinMs, isMobile]);
+  }, [isMobile, transferMaxDurationSeconds, transferMinDurationSeconds]);
   const transferFilteredSpecialDates = useMemo(() => {
     if (!isMobile) return transferSpecialDateOptions;
     return transferSpecialDateOptions.filter(
@@ -3401,16 +3407,15 @@ const BindStep = ({
     if (transferDurationDirty) {
       return;
     }
-    const nowSecondsLatest = Math.floor(Date.now() / 1000);
-    const minUnbindSeconds = nowSecondsLatest + minLockDurationSeconds;
+    const minUnbindSeconds = Math.floor(nowMs / 1000) + minLockDurationSeconds;
     const effectiveUnbindSeconds = Math.max(lockDetails.unlock_timestamp, minUnbindSeconds);
     setTransferEndDateInput(new Date(effectiveUnbindSeconds * 1000));
     lastTransferSyncedSeconds.current = remainingSeconds;
-  }, [lockDetails, transferDurationDirty, minLockDurationSeconds, transferEndDateMin]);
+  }, [bindView, effectiveTransferEndDateDefault, lockDetails, minLockDurationSeconds, nowMs, transferDurationDirty]);
 
   useEffect(() => {
     setTransferDurationDirty(false);
-    setTransferDurationMode('end-date');
+    setTransferDurationMode('duration');
     if (bindView !== 'add-hypr' && effectiveTransferEndDateDefault) {
       setTransferEndDateInput(effectiveTransferEndDateDefault);
     }
@@ -3418,31 +3423,60 @@ const BindStep = ({
     lastTransferSyncedSeconds.current = null;
   }, [bindView, effectiveTransferEndDateDefault, lockUpdateNonce, minLockDurationSeconds]);
   const transferEndDateDurationSeconds = secondsUntilDate(transferEndDateInput, transferNowSeconds);
-  const selectedTransferDurationSeconds = transferEndDateDurationSeconds ?? 0n;
+  const transferDurationSecondsFromInputs = useMemo(
+    () => durationPartsToSeconds(inputsToDurationParts(transferDurationInputs)),
+    [transferDurationInputs],
+  );
+  const selectedTransferDurationSeconds =
+    transferDurationMode === 'duration'
+      ? transferDurationSecondsFromInputs
+      : transferEndDateDurationSeconds ?? 0n;
   const destinationHash = useMemo(() => resolveNamehash(dstNameInput), [dstNameInput]);
   const destinationIsDefault = destinationHash === ZERO_NAMEHASH;
   const hasTransferValidEndDate = useMemo(() => {
     if (bindView === 'add-hypr') return true;
     if (destinationIsDefault) return false;
-    if (!transferEndDateInput) return false;
-    const ms = transferEndDateInput.getTime();
-    if (ms < effectiveTransferEndDateMinMs) return false;
-    if (ms > effectiveTransferEndDateMaxMs) return false;
-    return Boolean(transferEndDateDurationSeconds);
+    // Duration-first: validate only the selected duration for create/add/extend
+    if (selectedTransferDurationSeconds <= 0n) return false;
+    const seconds = Number(selectedTransferDurationSeconds);
+    if (seconds < transferMinDurationSeconds) return false;
+    // No maximum enforcement per request; still keep hints populated elsewhere
+    return true;
   }, [
     bindView,
     destinationIsDefault,
-    effectiveTransferEndDateMaxMs,
-    effectiveTransferEndDateMinMs,
-    transferEndDateDurationSeconds,
-    transferEndDateInput,
+    selectedTransferDurationSeconds,
+    transferMinDurationSeconds,
   ]);
+  // Compute a preview end timestamp; if duration meets/exceeds max, pin to max target timestamp (stable);
+  // if at/below min, use live min; else use now + duration.
+  const transferPreviewMs = useMemo(() => {
+    if (selectedTransferDurationSeconds <= 0n) return null;
+    const durMs = Number(selectedTransferDurationSeconds) * 1000;
+    const minMs = transferMinDurationSeconds * 1000;
+    const maxMs = transferMaxDurationSeconds * 1000;
+    if (durMs >= maxMs) return effectiveTransferEndDateMaxMs;
+    if (durMs <= minMs) return nowMs + minMs;
+    return nowMs + durMs;
+  }, [
+    effectiveTransferEndDateMaxMs,
+    nowMs,
+    selectedTransferDurationSeconds,
+    transferMaxDurationSeconds,
+    transferMinDurationSeconds,
+  ]);
+  // Keep the stored end-date/time in sync for display using the preview timestamp.
+  useEffect(() => {
+    if (transferDurationMode !== 'duration') return;
+    if (transferPreviewMs === null) return;
+    const next = new Date(transferPreviewMs);
+    setTransferEndDateInput(next);
+    setTransferEndTimeInput(formatTimeFromDate(next));
+  }, [formatTimeFromDate, transferDurationMode, transferPreviewMs]);
   const transferUnlockPreview = useMemo(() => {
-    if (selectedTransferDurationSeconds <= 0n) {
-      return null;
-    }
-    return formatTimestamp(transferNowSeconds + Number(selectedTransferDurationSeconds));
-  }, [selectedTransferDurationSeconds, transferNowSeconds]);
+    if (transferPreviewMs === null) return null;
+    return formatTimestamp(Math.floor(transferPreviewMs / 1000));
+  }, [transferPreviewMs]);
 
   const transferAmountProvided = transferAmountInput !== '';
   const transferAmountValue = transferAmountProvided ? Number(transferAmountInput) : NaN;
@@ -3503,18 +3537,24 @@ const BindStep = ({
     const candidate = new Date(`${transferCustomModalDate}T${transferCustomModalTime}:00`);
     if (Number.isNaN(candidate.getTime())) return true;
     const ms = candidate.getTime();
-    const minDelta = Math.max(0, effectiveTransferEndDateMinMs - nowMs);
-    const maxDelta = Math.max(0, effectiveTransferEndDateMaxMs - nowMs);
+    const minDelta = transferMinDurationSeconds * 1000;
+    const maxDelta = transferMaxDurationSeconds * 1000;
     const delta = ms - nowMs;
     return delta < minDelta || delta > maxDelta;
-  }, [effectiveTransferEndDateMaxMs, effectiveTransferEndDateMinMs, nowMs, transferCustomModalDate, transferCustomModalTime]);
+  }, [
+    nowMs,
+    transferCustomModalDate,
+    transferCustomModalTime,
+    transferMaxDurationSeconds,
+    transferMinDurationSeconds,
+  ]);
   const transferCustomHintMin = useMemo(
-    () => new Date(nowMs + Math.max(0, effectiveTransferEndDateMinMs - nowMs)),
-    [effectiveTransferEndDateMinMs, nowMs],
+    () => new Date(nowMs + transferMinDurationSeconds * 1000),
+    [nowMs, transferMinDurationSeconds],
   );
   const transferCustomHintMax = useMemo(
-    () => new Date(nowMs + Math.max(0, effectiveTransferEndDateMaxMs - nowMs)),
-    [effectiveTransferEndDateMaxMs, nowMs],
+    () => new Date(nowMs + transferMaxDurationSeconds * 1000),
+    [nowMs, transferMaxDurationSeconds],
   );
   const handleTransferCustomSet = () => {
     if (!transferCustomModalDate || !transferCustomModalTime) {
@@ -3555,11 +3595,9 @@ const BindStep = ({
     if (!isMobile) return;
     if (!shouldShowTransferEndInputs || transferRangeCollapsed) return;
     const defaultOpt =
-      bindView === 'add'
+      bindView === 'extend'
         ? transferMobileDurationOptions[transferMobileDurationOptions.length - 1]
-        : bindView === 'extend'
-          ? transferMobileDurationOptions[transferMobileDurationOptions.length - 1]
-          : transferMobileDurationOptions[0];
+        : transferMobileDurationOptions[0];
     if (!defaultOpt) return;
     const shouldSetDefault =
       !transferEndDateInput || (transferMobileDuration === '' && !transferMobileDateChoice);
@@ -3722,15 +3760,35 @@ const BindStep = ({
 
   const handleTransferDurationModeChange = (mode: DurationMode) => {
     setTransferDurationDirty(true);
-    setTransferDurationMode(mode);
+    // Force duration-first
+    setTransferDurationMode('duration');
   };
+
+  // Keep preset MIN/MAX selections in sync with the live min/max when the user hasn't edited duration manually.
+  useEffect(() => {
+    if (transferDurationMode !== 'duration') return;
+    if (transferDurationDirty) return;
+    const minSeconds = BigInt(transferMinDurationSeconds);
+    const maxSeconds = BigInt(transferMaxDurationSeconds);
+    if (selectedTransferDurationSeconds === minSeconds) {
+      setTransferDurationInputs(durationInputsFromSeconds(minSeconds));
+    } else if (selectedTransferDurationSeconds === maxSeconds) {
+      setTransferDurationInputs(durationInputsFromSeconds(maxSeconds));
+    }
+  }, [
+    transferDurationMode,
+    transferDurationDirty,
+    transferMinDurationSeconds,
+    transferMaxDurationSeconds,
+    selectedTransferDurationSeconds,
+  ]);
 
   useEffect(() => {
     if (isTransferConfirmed) {
       setDstNameInput('');
       setTransferAmountInput('');
       setTransferDurationInputs(createDefaultDurationInputsAtLeastMin(minLockDurationSeconds));
-      setTransferDurationMode('end-date');
+      setTransferDurationMode('duration');
       setTransferEndDateInput(transferEndDateMin);
       setTransferEndTimeDirty(false);
       lastTransferSyncedSeconds.current = null;
@@ -4265,6 +4323,49 @@ const BindStep = ({
           </div>
         )}
       </div>
+      {showDiagnostics && (bindView === 'create' || bindView === 'add' || bindView === 'extend' || bindView === 'add-hypr') && (
+        <div
+          className="inline-debug"
+          style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+        >
+          Binding validity debug:{' '}
+          {JSON.stringify({
+            bindView,
+            destinationIsDefault,
+            transferDurationMode,
+            selectedDurationSeconds: Number(selectedTransferDurationSeconds),
+            minDurationSeconds: transferMinDurationSeconds,
+            maxDurationSeconds: transferMaxDurationSeconds,
+            hasTransferValidEndDate,
+            endDateMs: transferEndDateInput ? transferEndDateInput.getTime() : null,
+            endDateDurationSeconds: transferEndDateDurationSeconds
+              ? Number(transferEndDateDurationSeconds)
+              : null,
+            rangeCollapsed: transferRangeCollapsed,
+          })}
+        </div>
+      )}
+      {showDiagnostics && (bindView === 'create' || bindView === 'add' || bindView === 'extend' || bindView === 'add-hypr') && (
+        <div
+          className="inline-debug"
+          style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+        >
+          Binding validity debug:{' '}
+          {JSON.stringify({
+            bindView,
+            destinationIsDefault,
+            transferDurationMode,
+            selectedDurationSeconds: Number(selectedTransferDurationSeconds),
+            minDurationSeconds: transferMinDurationSeconds,
+            maxDurationSeconds: transferMaxDurationSeconds,
+            hasTransferValidEndDate,
+            endDateMs: transferEndDateInput ? transferEndDateInput.getTime() : null,
+            endDateDurationSeconds: transferEndDateDurationSeconds
+              ? Number(transferEndDateDurationSeconds)
+              : null,
+          })}
+        </div>
+      )}
       {showTransferCustomModal && (
         <div className="modal-backdrop">
           <div className="modal-card">
