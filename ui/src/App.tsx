@@ -468,6 +468,7 @@ function App() {
   const bindTabShimmerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const bindTabShimmerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevHasLock = useRef(false);
+  const [connectPulse, setConnectPulse] = useState(false);
   const [desiredBindView, setDesiredBindView] = useState<BindView | null>(null);
 
   const targetRegistryAddress = useMemo(() => {
@@ -603,16 +604,23 @@ function App() {
     environmentReady &&
     hasBalanceData &&
     !hasHyprHoldings;
-  const showContent = connectComplete && !showHyprRequiredNotice && environmentReady;
-  const approveTabEnabled = showContent && !lockExpired;
-  const lockTabEnabled = showContent && (lockAllowanceWei > 0n || lockedWei > 0n);
+  const contentReady = connectComplete && !showHyprRequiredNotice && environmentReady;
+  const showContent = walletConnected ? contentReady : true;
+  const approveTabEnabled = walletConnected ? contentReady && !lockExpired : true;
+  const lockTabEnabled = walletConnected ? contentReady && (lockAllowanceWei > 0n || lockedWei > 0n) : true;
   const bindTabEnabled =
-    showContent && !lockExpired &&
-    ((availableToBind && availableToBind.amount_raw_wei !== '0') || bindings.length > 0);
+    (walletConnected ? contentReady && !lockExpired : true) &&
+    ((availableToBind && availableToBind.amount_raw_wei !== '0') || bindings.length > 0 || !walletConnected);
 
   const navigateToBindView = (view: BindView) => {
     setDesiredBindView(view);
     setActiveStep('bind');
+  };
+
+  const handleDisconnectedTap = () => {
+    if (!walletConnected) {
+      setConnectPulse(true);
+    }
   };
 
   useEffect(() => {
@@ -676,10 +684,7 @@ function App() {
   const hasExistingLockApp = lockedWei > 0n;
 
   const isStepGrayed = (id: StepId) => {
-    // Gray ALL tabs when wallet not connected
-    if (!walletConnected) {
-      return true;
-    }
+    // Allow browsing when disconnected
     // When user has a lock, nothing is grayed
     if (hasExistingLockApp) {
       return false;
@@ -804,7 +809,11 @@ function App() {
     <div className={`app${!walletConnected ? ' disconnected' : ''}`}>
       <div className="phone-shell">
         <div className="phone-frame">
-          <TopStatusBar walletConnected={walletConnected} />
+          <TopStatusBar
+            walletConnected={walletConnected}
+            triggerConnectPulse={connectPulse}
+            onConsumeConnectPulse={() => setConnectPulse(false)}
+          />
 
           <div className="phone-body">
             {!walletConnected && (
@@ -860,7 +869,7 @@ function App() {
                   {stepDescription ? <p className="step-description">{stepDescription}</p> : null}
                 </div>
 
-                <main className="step-content">
+                <main className="step-content" onClick={handleDisconnectedTap}>
                   {!minLockDurationReady && !initLoadTimeout ? (
                     <div className="lock-grid">
                       <div className="lock-card">
@@ -4406,28 +4415,25 @@ const DurationInputs = ({
   );
 };
 
-const TopStatusBar = ({ walletConnected }: { walletConnected: boolean }) => {
+const TopStatusBar = ({
+  walletConnected,
+  triggerConnectPulse,
+  onConsumeConnectPulse,
+}: {
+  walletConnected: boolean;
+  triggerConnectPulse: boolean;
+  onConsumeConnectPulse: () => void;
+}) => {
   const [showPopAnimation, setShowPopAnimation] = useState(!walletConnected);
   const [showShimmer, setShowShimmer] = useState(false);
   const shimmerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const shimmerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!walletConnected) {
-      // Start shimmer after 3s, repeat every 5-10s
-      const timeout = setTimeout(() => {
-        setShowShimmer(true);
-        setTimeout(() => setShowShimmer(false), 800);
-
-        shimmerIntervalRef.current = setInterval(() => {
-          setShowShimmer(true);
-          setTimeout(() => setShowShimmer(false), 800);
-        }, 5000 + Math.random() * 5000);
-      }, 3000);
-
-      return () => {
-        clearTimeout(timeout);
-        if (shimmerIntervalRef.current) clearInterval(shimmerIntervalRef.current);
-      };
+      setShowPopAnimation(true);
+      if (shimmerIntervalRef.current) clearInterval(shimmerIntervalRef.current);
+      if (shimmerTimeoutRef.current) clearTimeout(shimmerTimeoutRef.current);
     } else {
       // Wallet connected - stop animations
       setShowPopAnimation(false);
@@ -4436,13 +4442,36 @@ const TopStatusBar = ({ walletConnected }: { walletConnected: boolean }) => {
         clearInterval(shimmerIntervalRef.current);
         shimmerIntervalRef.current = null;
       }
+      if (shimmerTimeoutRef.current) {
+        clearTimeout(shimmerTimeoutRef.current);
+        shimmerTimeoutRef.current = null;
+      }
     }
   }, [walletConnected]);
+
+  useEffect(() => {
+    if (walletConnected) return;
+    if (!triggerConnectPulse) return;
+    setShowPopAnimation(true);
+    shimmerTimeoutRef.current = setTimeout(() => {
+      setShowShimmer(true);
+      setTimeout(() => setShowShimmer(false), 800);
+    }, 1000);
+    setTimeout(() => setShowPopAnimation(false), 400);
+    onConsumeConnectPulse();
+    return () => {
+      if (shimmerTimeoutRef.current) {
+        clearTimeout(shimmerTimeoutRef.current);
+        shimmerTimeoutRef.current = null;
+      }
+    };
+  }, [triggerConnectPulse, walletConnected, onConsumeConnectPulse]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (shimmerIntervalRef.current) clearInterval(shimmerIntervalRef.current);
+      if (shimmerTimeoutRef.current) clearTimeout(shimmerTimeoutRef.current);
     };
   }, []);
 
