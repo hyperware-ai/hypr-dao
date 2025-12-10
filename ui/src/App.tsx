@@ -407,7 +407,7 @@ const calculateRequiredAdditionalDuration = (
 };
 
 function App() {
-  const [activeStep, setActiveStep] = useState<StepId>('lock');
+  const [activeStep, setActiveStep] = useState<StepId>('approve');
   const [lockUpdateNonce, setLockUpdateNonce] = useState(0);
   const [hasBoundAnything, setHasBoundAnything] = useState(() =>
     localStorage.getItem('hypr-dao-has-bound') === 'true'
@@ -790,6 +790,12 @@ function App() {
     };
   }, []);
 
+  // Lock create button shimmer when creating first lock
+  // Reuse tab animations for create buttons
+  const createLockButtonPop = showLockPopAnimation;
+  const createLockButtonShimmer = showLockShimmer;
+  const createBindButtonPop = showBindTabPopAnimation;
+  const createBindButtonShimmer = showBindTabShimmer;
   const handleSelectStep = (id: StepId) => {
     if (canAccessStep(id)) {
       setActiveStep(id);
@@ -907,6 +913,7 @@ function App() {
               hyprApproved={hyprApproved}
               lockAllowance={tokeregistryAllowance}
               availableToBind={availableToBind}
+              bindings={bindings}
               hyprTokenAddress={hyprTokenAddress}
               lastError={lastError}
               isLoading={isLoading}
@@ -921,14 +928,17 @@ function App() {
               onNavigateBind={navigateToBindView}
               bindTabPop={showBindTabPopAnimation}
               bindTabShimmer={showBindTabShimmer}
+              lockCreatePop={createLockButtonPop}
+              lockCreateShimmer={createLockButtonShimmer}
+              onWithdrawSuccess={() => setActiveStep('approve')}
             />
           )}
 
-      {activeStep === 'bind' && (
-        <BindStep
-          connectComplete={connectComplete}
-          walletConnected={walletConnected}
-          walletAddress={address}
+          {activeStep === 'bind' && (
+            <BindStep
+              connectComplete={connectComplete}
+              walletConnected={walletConnected}
+              walletAddress={address}
                           targetRegistryAddress={targetRegistryAddress}
                           availableToBind={availableToBind}
                           lockDetails={lockDetails}
@@ -936,14 +946,16 @@ function App() {
                           refreshLockStatus={refreshLockStatusForWallet}
                           minLockDurationSeconds={minLockDurationSeconds}
           lockUpdateNonce={lockUpdateNonce}
-          isMobile={isMobile}
-          activeStep={activeStep}
-          hasBoundAnything={hasBoundAnything}
-          onBindSuccess={markHasBound}
-          desiredBindView={desiredBindView}
-          onConsumeDesiredBindView={() => setDesiredBindView(null)}
-        />
-      )}
+              isMobile={isMobile}
+              activeStep={activeStep}
+              hasBoundAnything={hasBoundAnything}
+              onBindSuccess={markHasBound}
+              desiredBindView={desiredBindView}
+              onConsumeDesiredBindView={() => setDesiredBindView(null)}
+              bindCreatePop={createBindButtonPop}
+              bindCreateShimmer={createBindButtonShimmer}
+            />
+          )}
                     </>
                   )}
                 </main>
@@ -978,6 +990,7 @@ interface LockStepProps {
   hyprApproved: BalanceView | null;
   lockAllowance: BalanceView | null;
   availableToBind: BalanceView | null;
+  bindings: BindingView[];
   hyprTokenAddress: string | null;
   lastError: string | null;
   isLoading: boolean;
@@ -992,6 +1005,9 @@ interface LockStepProps {
   onNavigateBind: (view: BindView) => void;
   bindTabPop: boolean;
   bindTabShimmer: boolean;
+  lockCreatePop: boolean;
+  lockCreateShimmer: boolean;
+  onWithdrawSuccess?: () => void;
 }
 
 const LockStep = ({
@@ -1003,6 +1019,7 @@ const LockStep = ({
   hyprApproved,
   lockAllowance,
   availableToBind,
+  bindings,
   hyprTokenAddress,
   lastError,
   isLoading,
@@ -1017,12 +1034,18 @@ const LockStep = ({
   onNavigateBind,
   bindTabPop,
   bindTabShimmer,
+  lockCreatePop,
+  lockCreateShimmer,
+  onWithdrawSuccess,
 }: LockStepProps) => {
   const [amountInput, setAmountInput] = useState('');
   const [durationInputs, setDurationInputs] = useState<DurationInputValues>(() =>
     createDefaultDurationInputsAtLeastMin(minLockDurationSeconds),
   );
-  const [lockView, setLockView] = useState<LockView>('manage');
+  const [lockView, setLockView] = useState<LockView>(() => {
+    const lockedAmountWeiInit = lockDetails?.amount_raw_wei ? BigInt(lockDetails.amount_raw_wei) : 0n;
+    return lockedAmountWeiInit > 0n ? 'details' : 'manage';
+  });
   const [lockDurationDirty, setLockDurationDirty] = useState(false);
   const [lockDurationMode, setLockDurationMode] = useState<DurationMode>('duration');
   const [lockEndDateInput, setLockEndDateInput] = useState<Date | null>(null);
@@ -1047,6 +1070,7 @@ const LockStep = ({
   const manageErrorRef = useRef<HTMLDivElement | null>(null);
   const txNoticeRef = useRef<HTMLDivElement | null>(null);
   const manageSuccessRef = useRef<HTMLDivElement | null>(null);
+  const withdrawHandledRef = useRef(false);
 
   const [pendingLock, setPendingLock] = useState<{ amount: bigint; duration: bigint } | null>(null);
   const allowanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1058,7 +1082,9 @@ const LockStep = ({
 
   const durationParts = useMemo(() => inputsToDurationParts(durationInputs), [durationInputs]);
   const lockedAmountWei = lockDetails?.amount_raw_wei ? BigInt(lockDetails.amount_raw_wei) : 0n;
-    const hasExistingLock = lockedAmountWei > 0n;
+  const hasExistingLock = lockedAmountWei > 0n;
+  const displayLockView =
+    hasExistingLock && lockView === 'manage' && !userSetLockView ? 'details' : lockView;
   const lockAvailableWei = lockAllowance?.amount_raw_wei ? BigInt(lockAllowance.amount_raw_wei) : 0n;
   const lockExpired = hasExistingLock && (lockDetails?.remaining_seconds ?? 0) === 0;
   useEffect(() => {
@@ -1075,11 +1101,11 @@ const LockStep = ({
   }, [hasExistingLock, lockView, userSetLockView]);
 
   useEffect(() => {
-    if (lockExpired && lockView !== 'details') {
+    if (lockExpired && displayLockView !== 'details') {
       setUserSetLockView(false);
       setLockView('details');
     }
-  }, [lockExpired, lockView]);
+  }, [lockExpired, displayLockView]);
   const lastSyncedDurationSeconds = useRef<number | null>(null);
   useEffect(() => {
     if (!hasExistingLock) {
@@ -1318,10 +1344,17 @@ const LockStep = ({
   }, [isManageConfirmed, manageTxHash]);
 
   useEffect(() => {
-    if (isWithdrawConfirmed) {
-      void refreshLockStatus();
+    if (!isWithdrawConfirmed) {
+      withdrawHandledRef.current = false;
+      return;
     }
-  }, [isWithdrawConfirmed, refreshLockStatus]);
+    if (withdrawHandledRef.current) return;
+    withdrawHandledRef.current = true;
+    void refreshLockStatus();
+    if (onWithdrawSuccess) {
+      onWithdrawSuccess();
+    }
+  }, [isWithdrawConfirmed, refreshLockStatus, onWithdrawSuccess]);
 
   useEffect(() => {
     if (isWithdrawConfirmed && withdrawTxHash) {
@@ -1611,7 +1644,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     setShowLockCustomModal(false);
   };
 
-  const lockHeaderSubtitle = 'Lock an amount of HYPR for a specified duration to use in bindings.';
+  const lockHeaderSubtitle = 'Lock some or all of your approved HYPR to use in bindings and to enable DAO voting rights.';
   const allowZeroAmount = lockView === 'extend';
   const amountProvided = amountInput !== '';
   const amountValue = amountProvided ? Number(amountInput) : 0;
@@ -2024,7 +2057,14 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     }
   }, [defaultEndMsForView, isMobile, lockDurationDirty, lockEndDateInput, lockEndTimeDirty]);
 
-  const maxAmountLabel = lockAllowance?.amount_formatted_hypr ?? 'Loading…';
+  const maxAmountLabel = walletConnected
+    ? lockAllowance?.amount_formatted_hypr ?? 'HYPR'
+    : 'HYPR';
+  const amountLabel = !walletConnected
+    ? 'Amount (HYPR)'
+    : hasExistingLock
+      ? `Amount to add (approved up to ${maxAmountLabel})`
+      : `Amount (approved up to ${maxAmountLabel})`;
   const maxAmountWei = lockAllowance?.amount_raw_wei ? BigInt(lockAllowance.amount_raw_wei) : 0n;
   const exceedsLockAvailable = additionalAmountWei > maxAmountWei;
   const lockButtonDisabled =
@@ -2142,7 +2182,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
 
   return (
     <section className="step-card lock-step">
-      {lockView === 'details' && (
+      {displayLockView === 'details' && (
         <div className="lock-grid">
           {lockDetails && hasExistingLock ? (
             <div className="lock-detail-card">
@@ -2150,7 +2190,18 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                 <span className="lock-card-label">
                   {lockExpired ? 'Previously locked amount' : 'Locked amount'}
                 </span>
-                <span className="lock-card-value">{lockDetails.amount_formatted_hypr}</span>
+                <span className="lock-card-value">
+                  {lockDetails.amount_formatted_hypr}
+                  {lockExpired && (
+                    <button
+                      type="button"
+                      className="pill-button warning-pill inline-pill"
+                      onClick={handleWithdraw}
+                    >
+                      {isWithdrawPending || isWithdrawConfirming ? <span className="spinner" /> : 'Withdraw'}
+                    </button>
+                  )}
+                </span>
               </div>
               <div className={`lock-card${lockExpired ? ' expired-card' : ''}`}>
                 <span className="lock-card-label">
@@ -2164,15 +2215,25 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                       ? 'Unlocked'
                       : `${formatSeconds(lockDetails.remaining_seconds)} remaining`}
                 </span>
-                {lockExpired && (
-                  <button
-                    type="button"
-                    className="secondary-button warning-button"
-                    disabled={isWithdrawPending || isWithdrawConfirming}
-                    onClick={handleWithdraw}
-                  >
-                    {isWithdrawPending || isWithdrawConfirming ? <span className="spinner" /> : 'Withdraw'}
-                  </button>
+                {!lockExpired && (
+                  <span className="lock-card-sub actions-inline">
+                    <button
+                      type="button"
+                      className="pill-button"
+                      onClick={handleShowExtendPanel}
+                    >
+                      Extend lock
+                    </button>
+                    {lockAvailableWei > 0n && (
+                      <button
+                        type="button"
+                        className="pill-button"
+                        onClick={handleShowManagePanel}
+                      >
+                        Add HYPR
+                      </button>
+                    )}
+                  </span>
                 )}
                 {lockExpired && (
                   <div className="inline-hint">
@@ -2181,53 +2242,36 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                 )}
               </div>
               {!lockExpired && (
-                <div className="lock-detail-actions">
-                  {!hasBindings ? (
-                    <button
-                      type="button"
-                      className={`secondary-button${bindTabPop ? ' bind-button-pop' : ''}${bindTabShimmer ? ' bind-button-shimmer' : ''}`}
-                      style={{ width: 'fit-content', fontWeight: 700 }}
-                      onClick={() => onNavigateBind('create')}
-                    >
-                      Create binding
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="secondary-button ghost"
-                      style={{ width: 'fit-content' }}
-                      onClick={() => onNavigateBind('details')}
-                    >
-                      View bindings
-                    </button>
-                  )}
+                <div className="approval-locked-row" style={{ marginTop: '0.35rem' }}>
+                  <div className="lock-detail-stat">
+                  <span className="lock-card-label">Amount already bound</span>
+                  <span className="lock-card-value">
+                      {(() => {
+                        const totalBoundWei = bindings.reduce((acc: bigint, b: BindingView) => {
+                          return acc + BigInt(b.amount_raw_wei ?? '0');
+                        }, 0n);
+                        return totalBoundWei === 0n ? '0 HYPR' : formatHyprWei(totalBoundWei);
+                      })()}{' '}
+                      <button
+                        type="button"
+                        className={`pill-button${bindTabPop ? ' bind-button-pop' : ''}${bindTabShimmer ? ' bind-button-shimmer' : ''} inline-pill`}
+                        style={{ fontWeight: hasBindings ? 500 : 700 }}
+                        onClick={() => onNavigateBind(hasBindings ? 'details' : 'create')}
+                      >
+                        {hasBindings ? 'View bindings' : 'Create binding'}
+                      </button>
+                    </span>
+                  </div>
                 </div>
               )}
-              <div className="lock-detail-actions">
-                {!lockExpired && (
-                  <button type="button" className="secondary-button" style={{ width: 'fit-content' }} onClick={handleShowExtendPanel}>
-                    Extend lock
-                  </button>
-                )}
-                {!lockExpired && lockAvailableWei > 0n && (
-                  <button
-                    type="button"
-                    className="secondary-button ghost"
-                    style={{ marginTop: '0.5rem', width: 'fit-content' }}
-                    onClick={handleShowManagePanel}
-                  >
-                    Add HYPR to lock
-                  </button>
-                )}
-                {txNotice && (
-                  <div
-                    className={txNotice.kind === 'success' ? 'inline-success' : 'inline-error'}
-                    ref={txNoticeRef}
-                  >
-                    {txNotice.text}
-                  </div>
-                )}
-              </div>
+              {txNotice && (
+                <div
+                  className={txNotice.kind === 'success' ? 'inline-success' : 'inline-error'}
+                  ref={txNoticeRef}
+                >
+                  {txNotice.text}
+                </div>
+              )}
             </div>
           ) : (
             <div className="lock-empty">
@@ -2238,32 +2282,30 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
         </div>
       )}
 
-          {(lockView === 'manage' || lockView === 'extend') && (
+          {(displayLockView === 'manage' || displayLockView === 'extend') && (
         <form className="lock-form" onSubmit={handleManageLock}>
           <div className="form-header">
             <div className="form-header-text">
               <h3>
-                {lockView === 'extend'
+                {displayLockView === 'extend'
                   ? 'Extend lock'
                 : hasExistingLock
                   ? 'Add HYPR to lock'
-                  : 'Create HYPR lock'}
+                  : 'Create your HYPR lock'}
               </h3>
-              {lockView === 'manage' && !hasExistingLock && <p>{lockHeaderSubtitle}</p>}
+              {displayLockView === 'manage' && !hasExistingLock && <p>{lockHeaderSubtitle}</p>}
             </div>
-            {showDiagnostics && (lockView === 'manage' || lockView === 'extend') && (
+            {showDiagnostics && (displayLockView === 'manage' || displayLockView === 'extend') && (
               <button type="button" className="secondary-button ghost diag-button" onClick={openLockDiagnostics}>
                 Diagnostics
               </button>
             )}
           </div>
-          {lockView !== 'extend' && (
+          {displayLockView !== 'extend' && (
           <div className="input-grid">
             <label className="input-field">
               <span>
-                {hasExistingLock
-                  ? `Amount to add (approved up to ${maxAmountLabel})`
-                  : `Amount (approved up to ${maxAmountLabel})`}
+                {amountLabel}
               </span>
               <input
                 type="number"
@@ -2271,9 +2313,10 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                 step="0.000000000000000001"
                 value={amountInput}
                 onChange={(event) => setAmountInput(event.target.value)}
+                placeholder="0.0"
               />
               {hasExistingLock &&
-                lockView === 'manage' &&
+                displayLockView === 'manage' &&
                 additionalAmountWei > 0n &&
                 !exceedsLockAvailable && (
                 <span className="input-subtext">
@@ -2283,7 +2326,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
             </label>
           </div>
           )}
-          {showLockFormContent || lockView === 'extend' ? (
+          {showLockFormContent || displayLockView === 'extend' ? (
             isMobile ? (
               <>
                 {hasExistingLock && lockView === 'manage' && additionalAmountWei > 0n && !exceedsLockAvailable && (
@@ -2412,7 +2455,11 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
             )
           ) : null}
           <div className="form-actions">
-            <button type="submit" className="secondary-button" disabled={lockButtonDisabled}>
+            <button
+              type="submit"
+              className={`secondary-button${!hasExistingLock ? ' lock-create-button' : ''}${!hasExistingLock && lockCreatePop ? ' bind-button-pop' : ''}${!hasExistingLock && lockCreateShimmer ? ' bind-button-shimmer' : ''}`}
+              disabled={lockButtonDisabled}
+            >
               {isManagePending || isManageConfirming || isAllowancePending || isAllowanceConfirming ? (
                 <span className="spinner" />
               ) : lockView === 'extend'
@@ -2565,6 +2612,7 @@ const ApproveStep = ({
   const [error, setError] = useState<string | null>(null);
   const [successHash, setSuccessHash] = useState<`0x${string}` | null>(null);
   const [isRevoking, setIsRevoking] = useState(false);
+  const [showResize, setShowResize] = useState(false);
   const [showCreateLockPop, setShowCreateLockPop] = useState(false);
   const [showCreateLockShimmer, setShowCreateLockShimmer] = useState(false);
   const createLockShimmerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2598,6 +2646,7 @@ const ApproveStep = ({
     if (isAllowanceConfirmed && allowanceTxHash) {
       setSuccessHash(allowanceTxHash);
       setAmountInput('');
+      setShowResize(false);
       setIsRevoking(false);
       void refreshLockStatus();
     }
@@ -2662,6 +2711,11 @@ const ApproveStep = ({
       return () => clearTimeout(timeout);
     }
   }, [successHash]);
+  useEffect(() => {
+    if (!hasExistingApproval) {
+      setShowResize(false);
+    }
+  }, [hasExistingApproval]);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -2751,95 +2805,96 @@ const ApproveStep = ({
   return (
     <section className="step-panel approve-step">
       <form className={approveFormClass} onSubmit={handleSubmit}>
-        <div className="form-header">
-          <div className="form-header-text">
-            {!hasExistingApproval ? (
-              <>
-                <h3>{hasActiveLock ? 'Approve HYPR to enable additional locking' : 'Approve HYPR to enable locking'}</h3>
-                <p className="form-subtitle">
-                  {hasActiveLock ? 'Approve only as much as you intend to add to your lock.' : 'Approve only as much as you intend to lock.'}
-                </p>
-              </>
-            ) : null}
+        {!hasExistingApproval && (
+          <div className="form-header">
+            <div className="form-header-text">
+              <h3>{hasActiveLock ? 'Approve HYPR to enable additional locking' : 'Approve HYPR to enable locking'}</h3>
+              <p className="form-subtitle">
+                {hasActiveLock ? 'Approve only as much as you intend to add to your lock.' : 'Approve only as much as you intend to lock.'}
+              </p>
+            </div>
           </div>
-        </div>
+        )}
 
         {lockAvailableWei > 0n && (
           <>
             <div className="lock-card">
-              <div className="lock-detail-stat">
-                <span className="lock-card-label">
-                  {hasActiveLock ? 'Amount approved to add to lock' : 'Amount approved to lock'}
-                </span>
-                <span className="lock-card-value">{lockAllowance?.amount_formatted_hypr ?? '0'}</span>
-              </div>
-              {hasActiveLock && (
-                <div className="lock-detail-stat" style={{ marginTop: '0.35rem' }}>
-                  <span className="lock-card-label">Amount already locked</span>
-                  <span className="lock-card-value">{lockedAmountFormatted}</span>
+              <div className="approval-stack">
+                <div className="approval-row">
+                  <div className="lock-detail-stat">
+                    <span className="lock-card-label">
+                      {hasActiveLock ? 'Amount approved to add to lock' : 'Amount approved to lock'}
+                    </span>
+                    <span className="lock-card-value">
+                      {lockAllowance?.amount_formatted_hypr ?? '0'}{' '}
+                      <button
+                        type="button"
+                        className={`pill-button ghost inline-pill${showResize ? ' active' : ''}`}
+                        disabled={!walletConnected || isAllowancePending || isAllowanceConfirming}
+                        onClick={() => setShowResize((prev) => !prev)}
+                      >
+                        Resize
+                      </button>{' '}
+                      <button
+                        type="button"
+                        className="pill-button ghost inline-pill"
+                        disabled={!walletConnected || isAllowancePending || isAllowanceConfirming}
+                        onClick={handleRevoke}
+                      >
+                        {isRevoking || isAllowancePending || isAllowanceConfirming ? (
+                          <span className="spinner" />
+                        ) : (
+                          'Revoke approval'
+                        )}
+                      </button>
+                    </span>
+                  </div>
                 </div>
-              )}
-              <div className="lock-detail-actions">
-                {!hasActiveLock && (
-              <button
-                type="button"
-                className={`secondary-button${showCreateLockPop ? ' bind-button-pop' : ''}${showCreateLockShimmer ? ' bind-button-shimmer' : ''}`}
-                style={{ width: 'fit-content', fontWeight: 700 }}
-                onClick={() => onNavigateLock()}
-              >
-                Create lock
-              </button>
-            )}
-            {hasActiveLock && (
-              <button
-                type="button"
-                className="secondary-button ghost"
-                style={{ width: 'fit-content' }}
-                onClick={() => onNavigateLock()}
-              >
-                View lock
-              </button>
-            )}
-              <button
-                type="button"
-                className="secondary-button ghost"
-                style={{ width: 'fit-content' }}
-                disabled={!walletConnected || isAllowancePending || isAllowanceConfirming}
-                onClick={handleRevoke}
-              >
-                {isRevoking || isAllowancePending || isAllowanceConfirming ? (
-                  <span className="spinner" />
-                ) : (
-                  'Revoke approval'
-                  )}
-                </button>
+                <div className="approval-locked-row">
+                  <div className="lock-detail-stat">
+                    <span className="lock-card-label">Amount already locked</span>
+                    <span className="lock-card-value">
+                      {lockedAmountFormatted}{' '}
+                      <button
+                        type="button"
+                        className={`pill-button${hasActiveLock ? ' ghost' : ''} inline-pill${!hasActiveLock && showCreateLockPop ? ' bind-button-pop' : ''}${!hasActiveLock && showCreateLockShimmer ? ' bind-button-shimmer' : ''}`}
+                        style={{ fontWeight: hasActiveLock ? 500 : 700 }}
+                        onClick={() => onNavigateLock()}
+                      >
+                        {hasActiveLock ? 'View lock' : 'Create lock'}
+                      </button>
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
-            <div className="lock-card">
-              <h3 className="lock-card-title">Update approval</h3>
-              <div className="input-grid">
-                <label className="input-field">
-                  <span>
-                    Approved amount {hyprOwned ? `(up to ${hyprOwned.amount_formatted_hypr})` : '(HYPR)'}
-                  </span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.000000000000000001"
-                    value={amountInput}
-                    onChange={(event) => setAmountInput(event.target.value)}
-                    placeholder="0.0"
-                    required
-                    disabled={!walletConnected}
-                  />
-                </label>
+            {showResize && (
+              <div className="lock-card">
+                <h3 className="lock-card-title">Resize approved amount</h3>
+                <div className="input-grid">
+                  <label className="input-field">
+                    <span>
+                      New approved amount {hyprOwned ? `(up to ${hyprOwned.amount_formatted_hypr})` : '(HYPR)'}
+                    </span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.000000000000000001"
+                      value={amountInput}
+                      onChange={(event) => setAmountInput(event.target.value)}
+                      placeholder="0.0"
+                      required
+                      disabled={!walletConnected}
+                    />
+                  </label>
+                </div>
+                <div className="form-actions resize-actions">
+                  <button type="submit" className="secondary-button" disabled={approveButtonDisabled}>
+                    {isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Resize'}
+                  </button>
+                </div>
               </div>
-              <div className="form-actions">
-                <button type="submit" className="secondary-button" disabled={approveButtonDisabled}>
-                  {isAllowancePending || isAllowanceConfirming ? <span className="spinner" /> : 'Update'}
-                </button>
-              </div>
-            </div>
+            )}
           </>
         )}
 
@@ -2860,7 +2915,6 @@ const ApproveStep = ({
                   onChange={(event) => setAmountInput(event.target.value)}
                   placeholder="0.0"
                   required
-                  disabled={!walletConnected}
                 />
               </label>
             </div>
@@ -2905,6 +2959,8 @@ interface BindStepProps {
   onBindSuccess: () => void;
   desiredBindView: BindView | null;
   onConsumeDesiredBindView: () => void;
+  bindCreatePop: boolean;
+  bindCreateShimmer: boolean;
 }
 
 const BindStep = ({
@@ -2924,6 +2980,8 @@ const BindStep = ({
   onBindSuccess,
   desiredBindView,
   onConsumeDesiredBindView,
+  bindCreatePop,
+  bindCreateShimmer,
 }: BindStepProps) => {
   const [dstNameInput, setDstNameInput] = useState('');
   const [transferAmountInput, setTransferAmountInput] = useState('');
@@ -3602,7 +3660,7 @@ const BindStep = ({
 
     const hasDestinationName = dstNameInput.trim().length > 0;
     if (!hasDestinationName) {
-      pushTransferError('Enter a destination name.');
+      pushTransferError('Enter a binding target.');
       return;
     }
 
@@ -3646,7 +3704,7 @@ const BindStep = ({
       (binding) => binding.namehash.toLowerCase() === dstHash.toLowerCase(),
     );
     if (bindingExists && bindView !== 'extend' && bindView !== 'add-hypr') {
-      pushTransferError('A binding already exists for this name.');
+      pushTransferError('A binding already exists for this target.');
       return;
     }
     const maxAmountWei = parseEther(transferAmountInput);
@@ -3714,12 +3772,14 @@ const BindStep = ({
 
   return (
     <section className="step-card lock-step">
-      <div className="lock-grid">
-        <div className="lock-card">
-          <div className="lock-card-label">HYPR available to bind</div>
-          <div className="lock-card-value">{availableToBind?.amount_formatted_hypr ?? '0 HYPR'}</div>
-        </div>
-      </div>
+        {walletConnected && (
+          <div className="lock-grid">
+            <div className="lock-card">
+              <div className="lock-card-label">HYPR available to bind</div>
+              <div className="lock-card-value">{availableToBind?.amount_formatted_hypr ?? '0 HYPR'}</div>
+            </div>
+          </div>
+        )}
 
       {bindView === 'details' && (
         <div className="lock-grid">
@@ -3764,7 +3824,7 @@ const BindStep = ({
                     reclaimingNamehash === binding.namehash &&
                     (isTransferPending || isTransferConfirming);
                   return (
-                    <div className={`binding-row${expired ? ' expired-card' : ''}`} key={binding.namehash}>
+                    <div className="binding-row" key={binding.namehash}>
                       <div className="binding-name">{binding.name ?? 'Unknown name'}</div>
                       <div className="binding-amount">{binding.amount_formatted_hypr}</div>
                       <div className="binding-sub">
@@ -3831,14 +3891,16 @@ const BindStep = ({
                         </div>
                       )}
                       {expired && (
-                        <button
-                          type="button"
-                          className="pill-button warning-pill"
-                          disabled={isTransferPending || isTransferConfirming}
-                          onClick={() => handleReclaimBinding(binding)}
-                        >
-                          {reclaimingThis ? <span className="spinner" /> : 'Reclaim'}
-                        </button>
+                        <div className="binding-actions">
+                          <button
+                            type="button"
+                            className="pill-button warning-pill"
+                            disabled={isTransferPending || isTransferConfirming}
+                            onClick={() => handleReclaimBinding(binding)}
+                          >
+                            {reclaimingThis ? <span className="spinner" /> : 'Reclaim HYPR from expired binding'}
+                          </button>
+                        </div>
                       )}
                     </div>
                   );
@@ -3849,11 +3911,11 @@ const BindStep = ({
         </div>
       )}
 
-      {bindView === 'details' && (
+      {bindView === 'details' && walletConnected && (
         <div className="form-actions">
           <button
             type="button"
-            className="secondary-button"
+            className={`secondary-button${showBindPopAnimation || bindCreatePop ? ' bind-button-pop' : ''}${showBindShimmer || bindCreateShimmer ? ' bind-button-shimmer' : ''}`}
             disabled={!availableToBind || BigInt(availableToBind.amount_raw_wei) === 0n}
             onClick={() => {
               setUserSetBindView(true);
@@ -3871,8 +3933,13 @@ const BindStep = ({
             <div className="form-header-text">
               {bindView === 'extend' && extendBindingName && <h3>Extend {extendBindingName} binding</h3>}
               {bindView === 'add-hypr' && addHyprBindingName && <h3>Add HYPR to {addHyprBindingName} binding</h3>}
-              {bindView === 'create' && <h3>Create first binding</h3>}
+              {bindView === 'create' && <h3>Create your first binding</h3>}
               {bindView === 'add' && <h3>Add new binding</h3>}
+              {bindView === 'create' && (
+                <p className="form-subtitle">
+                  Empower app functionality by binding some or all of your locked HYPR to one or more Hypermap nodes.
+                </p>
+              )}
             </div>
             {showDiagnostics && (bindView === 'create' || bindView === 'add' || bindView === 'extend') && (
               <button type="button" className="secondary-button ghost diag-button" onClick={openBindDiagnostics}>
@@ -3905,6 +3972,7 @@ const BindStep = ({
                 value={transferAmountInput}
                   onChange={(event) => setTransferAmountInput(event.target.value)}
                   required
+                  placeholder="0.0"
                 />
               </label>
             </div>
@@ -3922,6 +3990,7 @@ const BindStep = ({
                     value={transferAmountInput}
                     onChange={(event) => setTransferAmountInput(event.target.value)}
                     required
+                    placeholder="0.0"
                   />
                 </label>
               </div>

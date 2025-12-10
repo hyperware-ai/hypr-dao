@@ -236,6 +236,53 @@
   font-weight: 700;
 }
 
+.resize-actions {
+  margin-top: 0.35rem;
+}
+
+.approval-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.approval-row .pill-button {
+  white-space: nowrap;
+}
+
+.approval-row-single {
+  justify-content: flex-start;
+}
+
+.approval-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.approval-locked-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.approval-locked-row .pill-button {
+  white-space: nowrap;
+}
+
+.inline-pill {
+  margin-left: 0.5rem;
+  vertical-align: middle;
+}
+
+.pill-button.inline-pill {
+  min-width: auto;
+  height: 32px;
+  padding: 0 0.65rem;
+}
+
 .lock-card-label {
   text-transform: uppercase;
   font-size: 0.75rem;
@@ -253,6 +300,19 @@
   font-size: 0.85rem;
   color: var(--text-secondary);
   overflow-wrap: anywhere;
+}
+
+.actions-inline {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.lock-card-value .inline-pill {
+  margin-left: 0.35rem;
+}
+
+.pill-button.inline-pill.active {
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .lock-card-hint-label {
@@ -277,6 +337,11 @@
   flex-direction: column;
   gap: 0.5rem;
   margin-top: 0.5rem;
+}
+
+.lock-detail-actions.compact {
+  gap: 0.25rem;
+  margin-top: 0.15rem;
 }
 
 .lock-card-divider {
@@ -332,18 +397,28 @@
   align-items: center;
   justify-content: center;
   width: auto;
+  height: 32px;
+  min-width: 100px;
   align-self: flex-start;
   border: 1px solid var(--border-color);
   background: rgba(255, 255, 255, 0.03);
   color: var(--text-primary);
-  padding: 0.4rem 0.75rem;
+  padding: 0 0.75rem;
   border-radius: 999px;
   font-size: 0.9rem;
   line-height: 1.1rem;
+  outline: none;
+  box-sizing: border-box;
 }
 
 .pill-button:hover {
   border-color: var(--text-primary);
+}
+
+.pill-button:focus,
+.pill-button:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 .pill-button.warning-pill {
@@ -582,8 +657,8 @@
 
 .spinner {
   display: inline-block;
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
   border: 2px solid rgba(255, 255, 255, 0.2);
   border-top-color: var(--primary-color);
   border-radius: 50%;
