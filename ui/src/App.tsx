@@ -167,7 +167,12 @@ const formatShortDateLabel = (date: Date) => {
   const mm = MONTH_ABBR[date.getMonth()];
   const dd = String(date.getDate()).padStart(2, '0');
   const yy = String(date.getFullYear()).slice(-2);
-  return `${mm} ${dd} '${yy}`;
+  let h = date.getHours();
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const suffix = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  const hh = String(h).padStart(2, '0');
+  return `${mm} ${dd} '${yy} ${hh}:${minutes} ${suffix}`;
 };
 
 const buildSpecialDateOptions = () => {
@@ -1180,11 +1185,6 @@ const LockStep = ({
     // Clamp up to the protocol min; if the lock is close to expiring, min becomes the global minimum.
     return Math.max(minLockDurationSeconds, remaining + 1);
   }, [hasExistingLock, lockDetails?.unlock_timestamp, minLockDurationSeconds, nowSeconds]);
-  // Validation min for extend gets a small 2s tolerance to avoid flicker around the live floor
-  const extendValidationMinSeconds = useMemo(
-    () => Math.max(0, extendMinDurationSeconds - 2),
-    [extendMinDurationSeconds],
-  );
   const extendMinMillis = useMemo(
     () => nowMs + extendMinDurationSeconds * 1000,
     [extendMinDurationSeconds, nowMs],
@@ -1601,11 +1601,11 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
       }
     }
 
-    if (selectedLockDurationSeconds <= 0n) {
+    if (effectiveSelectedLockDurationSeconds <= 0n) {
       pushManageError('Enter a positive duration.');
       return;
     }
-    if (selectedLockDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
+    if (effectiveSelectedLockDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
       pushManageError(`Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`);
       return;
     }
@@ -1613,28 +1613,24 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     const amountWei = additionalAmountWei;
     const allowanceWei = lockAllowance ? BigInt(lockAllowance.amount_raw_wei) : 0n;
     const needsAllowanceTopUp = amountWei > allowanceWei;
-    let submittedDurationSeconds = selectedLockDurationSeconds;
+    let submittedDurationSeconds = effectiveSelectedLockDurationSeconds;
     if (hasExistingLock && amountWei > 0n) {
       const requiredDuration = calculateRequiredAdditionalDuration(
         existingAmountWei,
-        existingDurationSeconds,
+        currentRemainingSeconds,
         amountWei,
-        selectedLockDurationSeconds,
+        effectiveSelectedLockDurationSeconds,
       );
-    if (!requiredDuration) {
-      pushManageError('The size and duration of your existing lock restricts you from achieving your new desired lock duration. Consider either committing more HYPR or choosing a target duration closer to the existing lock duration.');
-      return;
-    }
-      if (
-        requiredDuration < minDurationSecondsBigInt ||
-        requiredDuration > BigInt(MAX_LOCK_DURATION_SECONDS)
-      ) {
+      if (!requiredDuration) {
         pushManageError(
           'The size and duration of your existing lock restricts you from achieving your new desired lock duration. Consider either committing more HYPR or choosing a target duration closer to the existing lock duration.',
         );
         return;
       }
       submittedDurationSeconds = requiredDuration;
+    }
+    if (submittedDurationSeconds < BigInt(minLockDurationSeconds)) {
+      submittedDurationSeconds = BigInt(minLockDurationSeconds);
     }
 
     if (needsAllowanceTopUp) {
@@ -1755,8 +1751,6 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
   }, [existingDurationSeconds, hasExistingLock, lockDetails?.unlock_timestamp, nowSeconds]);
   const zeroAmountExtendingOnly =
     hasExistingLock && additionalAmountWei === 0n && currentRemainingSeconds > 0n;
-  const durationLessThanExisting =
-    zeroAmountExtendingOnly && selectedLockDurationSeconds < currentRemainingSeconds;
 
   const addWeightedMinDurationSeconds = useMemo(() => {
     if (!hasExistingLock || lockView !== 'manage') return null;
@@ -1874,44 +1868,6 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
       minLockDurationSeconds,
     ],
   );
-  const lockAddMinDurationDisplay = useMemo(() => {
-    if (!hasExistingLock || lockView !== 'manage') return null;
-    const minSec = manageMinDurationSeconds ?? minLockDurationSeconds;
-    return { human: formatDurationSeconds(minSec), seconds: minSec };
-  }, [hasExistingLock, lockView, manageMinDurationSeconds, minLockDurationSeconds]);
-  const lockAddNoChangeDurationDisplay = useMemo(() => {
-    if (!hasExistingLock || lockView !== 'manage') return null;
-    const currentSec = Number(currentRemainingSeconds);
-    return { human: formatDurationSeconds(currentSec), seconds: currentSec };
-  }, [currentRemainingSeconds, hasExistingLock, lockView]);
-
-  const minDurationSecondsForView =
-    lockView === 'extend'
-      ? extendValidationMinSeconds
-      : hasExistingLock && lockView === 'manage'
-        ? manageMinDurationSeconds ?? minLockDurationSeconds
-        : minLockDurationSeconds;
-  const minDurationSecondsBigInt = BigInt(minDurationSecondsForView);
-  const requiredDurationSeconds = useMemo(() => {
-    if (!hasExistingLock || additionalAmountWei <= 0n) {
-      return selectedLockDurationSeconds;
-    }
-    return (
-      calculateRequiredAdditionalDuration(
-        existingAmountWei,
-        currentRemainingSeconds,
-        additionalAmountWei,
-        selectedLockDurationSeconds,
-      ) ?? selectedLockDurationSeconds
-    );
-  }, [
-    additionalAmountWei,
-    existingAmountWei,
-    currentRemainingSeconds,
-    hasExistingLock,
-    selectedLockDurationSeconds,
-  ]);
-
   const currentExpiryMs = useMemo(() => {
     if (!hasExistingLock || !lockDetails?.unlock_timestamp) return null;
     return lockDetails.unlock_timestamp * 1000;
@@ -1996,16 +1952,73 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     () => roundUpToNextDay(actualMinMsForView),
     [actualMinMsForView],
   );
+  const minEndDateForValidationMs =
+    lockView === 'extend'
+      ? extendMinMillis
+      : lockView === 'manage' && hasExistingLock
+        ? nowMs + (manageMinDurationSeconds ?? minLockDurationSeconds) * 1000
+        : lockEndDateMin.getTime();
+  const lockMinDurationSecondsForValidation =
+    lockView === 'extend'
+      ? extendMinDurationSeconds
+      : hasExistingLock && lockView === 'manage'
+        ? manageMinDurationSeconds ?? minLockDurationSeconds
+        : minLockDurationSeconds;
+  const lockMaxDurationSecondsForValidation =
+    lockView === 'extend'
+      ? MAX_LOCK_DURATION_SECONDS
+      : hasExistingLock && lockView === 'manage'
+        ? manageMaxDurationSeconds ?? lockMinDurationSecondsForValidation
+        : MAX_LOCK_DURATION_SECONDS;
+  const effectiveSelectedLockDurationSeconds = useMemo(() => {
+    const min = BigInt(lockMinDurationSecondsForValidation);
+    const max = BigInt(lockMaxDurationSecondsForValidation);
+    const cap = BigInt(MAX_LOCK_DURATION_SECONDS);
+    let next = selectedLockDurationSeconds;
+    if (next < min) next = min;
+    if (next > max) next = max;
+    if (next > cap) next = cap;
+    return next;
+  }, [
+    lockMaxDurationSecondsForValidation,
+    lockMinDurationSecondsForValidation,
+    selectedLockDurationSeconds,
+  ]);
+  const hasValidEndDate =
+    effectiveSelectedLockDurationSeconds >= BigInt(lockMinDurationSecondsForValidation) &&
+    effectiveSelectedLockDurationSeconds <= BigInt(lockMaxDurationSecondsForValidation) &&
+    effectiveSelectedLockDurationSeconds <= BigInt(MAX_LOCK_DURATION_SECONDS);
+  const durationLessThanExisting =
+    zeroAmountExtendingOnly && effectiveSelectedLockDurationSeconds < currentRemainingSeconds;
+  const requiredDurationSeconds = useMemo(() => {
+    if (!hasExistingLock || additionalAmountWei <= 0n) {
+      return effectiveSelectedLockDurationSeconds;
+    }
+    return (
+      calculateRequiredAdditionalDuration(
+        existingAmountWei,
+        currentRemainingSeconds,
+        additionalAmountWei,
+        effectiveSelectedLockDurationSeconds,
+      ) ?? effectiveSelectedLockDurationSeconds
+    );
+  }, [
+    additionalAmountWei,
+    effectiveSelectedLockDurationSeconds,
+    existingAmountWei,
+    currentRemainingSeconds,
+    hasExistingLock,
+  ]);
   const lockPreviewMs = useMemo(() => {
-    if (selectedLockDurationSeconds <= 0n) return null;
-    const durMs = Number(selectedLockDurationSeconds) * 1000;
+    if (effectiveSelectedLockDurationSeconds <= 0n) return null;
+    const durMs = Number(effectiveSelectedLockDurationSeconds) * 1000;
     const minMs = actualMinMsForView;
     const maxMs = maxMsForView;
     const target = nowMs + durMs;
     if (target < minMs) return minMs;
     if (target > maxMs) return maxMs;
     return target;
-  }, [actualMinMsForView, maxMsForView, nowMs, selectedLockDurationSeconds]);
+  }, [actualMinMsForView, effectiveSelectedLockDurationSeconds, maxMsForView, nowMs]);
   // Keep the lock expiry preview in sync with the selected duration so the hint ticks with "now"
   useEffect(() => {
     if (effectiveMode !== 'duration') return;
@@ -2025,28 +2038,6 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     return displayMinDateForHint.getTime();
   }, [actualMinMsForView, displayMinDateForHint, hasExistingLock, lockDetails?.unlock_timestamp, lockView, suppressLockHint]);
 
-  const minEndDateForValidationMs =
-    lockView === 'extend'
-      ? extendMinMillis
-      : lockView === 'manage' && hasExistingLock
-        ? nowMs + (manageMinDurationSeconds ?? minLockDurationSeconds) * 1000
-        : lockEndDateMin.getTime();
-  const lockMinDurationSecondsForValidation =
-    lockView === 'extend'
-      ? extendMinDurationSeconds
-      : hasExistingLock && lockView === 'manage'
-        ? manageMinDurationSeconds ?? minLockDurationSeconds
-        : minLockDurationSeconds;
-  const lockMaxDurationSecondsForValidation =
-    lockView === 'extend'
-      ? MAX_LOCK_DURATION_SECONDS
-      : hasExistingLock && lockView === 'manage'
-        ? manageMaxDurationSeconds ?? lockMinDurationSecondsForValidation
-        : MAX_LOCK_DURATION_SECONDS;
-  const hasValidEndDate =
-    selectedLockDurationSeconds >= BigInt(lockMinDurationSecondsForValidation) &&
-    selectedLockDurationSeconds <= BigInt(lockMaxDurationSecondsForValidation) &&
-    selectedLockDurationSeconds <= BigInt(MAX_LOCK_DURATION_SECONDS);
   const lockCustomSetDisabled = useMemo(() => {
     if (!lockCustomModalDate || !lockCustomModalTime) return true;
     const candidate = new Date(`${lockCustomModalDate}T${lockCustomModalTime}:00`);
@@ -2663,13 +2654,13 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                 onTogglePrecision={
                   lockView === 'extend' ? () => {} : () => setShowLockPrecision((prev) => !prev)
                 }
-                durationSeconds={selectedLockDurationSeconds}
+                durationSeconds={effectiveSelectedLockDurationSeconds}
                 unlockPreview={null}
                 computedDurationLabel={
                   lockView === 'extend'
                     ? undefined
                     : hasExistingLock
-                      ? formatSeconds(Number(selectedLockDurationSeconds))
+                      ? formatSeconds(Number(effectiveSelectedLockDurationSeconds))
                       : undefined
                 }
                 computedUnlockLabel={
@@ -2745,19 +2736,6 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
           {manageError && (
             <div className="inline-error" ref={manageErrorRef}>
               {manageError.text}
-            </div>
-          )}
-          {lockView === 'manage' && hasExistingLock && (
-            <div className="lock-card-sub">
-              {`MIN duration: ${
-                lockAddMinDurationDisplay
-                  ? `${lockAddMinDurationDisplay.human} (${lockAddMinDurationDisplay.seconds}s)`
-                  : 'N/A'
-              } · NO CHANGE: ${
-                lockAddNoChangeDurationDisplay
-                  ? `${lockAddNoChangeDurationDisplay.human} (${lockAddNoChangeDurationDisplay.seconds}s)`
-                  : 'N/A'
-              }`}
             </div>
           )}
           {manageSuccessHash && (
@@ -3389,7 +3367,6 @@ const BindStep = ({
   }, [transferError]);
 
   const transferNowSeconds = Math.floor(nowMs / 1000);
-  const minDurationSecondsBigInt = BigInt(minLockDurationSeconds);
   const transferEndDateMin = useMemo(
     () => new Date((transferNowSeconds + minLockDurationSeconds) * 1000),
     [transferNowSeconds, minLockDurationSeconds],
@@ -3417,8 +3394,9 @@ const BindStep = ({
   }, [transferEndDateMax, effectiveTransferEndDateMinMs]);
   const transferMinDurationSeconds = useMemo(() => {
     // Ceil to avoid millisecond jitter from floor(nowMs/1000) vs nowMs
-    return Math.max(0, Math.ceil((effectiveTransferEndDateMinMs - nowMs) / 1000));
-  }, [effectiveTransferEndDateMinMs, nowMs]);
+    const deltaSeconds = Math.max(0, Math.ceil((effectiveTransferEndDateMinMs - nowMs) / 1000));
+    return Math.max(minLockDurationSeconds, deltaSeconds);
+  }, [effectiveTransferEndDateMinMs, minLockDurationSeconds, nowMs]);
   const transferMaxDurationSeconds = useMemo(() => {
     // Floor so max never dips below min due to rounding jitter
     return Math.max(0, Math.floor((effectiveTransferEndDateMaxMs - nowMs) / 1000));
@@ -4084,8 +4062,9 @@ const BindStep = ({
         return;
       }
 
-      if (selectedTransferDurationSeconds < minDurationSecondsBigInt) {
-        pushTransferError(`Duration must be at least ${formatDurationSeconds(minLockDurationSeconds)}.`);
+      const minDurationBigInt = BigInt(transferMinDurationSeconds);
+      if (selectedTransferDurationSeconds < minDurationBigInt) {
+        pushTransferError(`Duration must be at least ${formatDurationSeconds(transferMinDurationSeconds)}.`);
         return;
       }
       if (selectedTransferDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
@@ -4510,49 +4489,6 @@ const BindStep = ({
           </div>
         )}
       </div>
-      {showDiagnostics && (bindView === 'create' || bindView === 'add' || bindView === 'extend' || bindView === 'add-hypr') && (
-        <div
-          className="inline-debug"
-          style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-        >
-          Binding validity debug:{' '}
-          {JSON.stringify({
-            bindView,
-            destinationIsDefault,
-            transferDurationMode,
-            selectedDurationSeconds: Number(selectedTransferDurationSeconds),
-            minDurationSeconds: transferMinDurationSeconds,
-            maxDurationSeconds: transferMaxDurationSeconds,
-            hasTransferValidEndDate,
-            endDateMs: transferEndDateInput ? transferEndDateInput.getTime() : null,
-            endDateDurationSeconds: transferEndDateDurationSeconds
-              ? Number(transferEndDateDurationSeconds)
-              : null,
-            rangeCollapsed: transferRangeCollapsed,
-          })}
-        </div>
-      )}
-      {showDiagnostics && (bindView === 'create' || bindView === 'add' || bindView === 'extend' || bindView === 'add-hypr') && (
-        <div
-          className="inline-debug"
-          style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-        >
-          Binding validity debug:{' '}
-          {JSON.stringify({
-            bindView,
-            destinationIsDefault,
-            transferDurationMode,
-            selectedDurationSeconds: Number(selectedTransferDurationSeconds),
-            minDurationSeconds: transferMinDurationSeconds,
-            maxDurationSeconds: transferMaxDurationSeconds,
-            hasTransferValidEndDate,
-            endDateMs: transferEndDateInput ? transferEndDateInput.getTime() : null,
-            endDateDurationSeconds: transferEndDateDurationSeconds
-              ? Number(transferEndDateDurationSeconds)
-              : null,
-          })}
-        </div>
-      )}
       {showTransferCustomModal && (
         <div className="modal-backdrop">
           <div className="modal-card">
