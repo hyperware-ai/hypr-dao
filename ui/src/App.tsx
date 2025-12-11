@@ -3189,7 +3189,8 @@ const BindStep = ({
     }
   }, [bindings, bindingsSort]);
   useEffect(() => {
-    if (!userSetBindView) {
+    // Only auto-assign when the user hasn't selected a view AND we're not in an explicit add/extend flow.
+    if (!userSetBindView && bindView !== 'add' && bindView !== 'extend' && bindView !== 'add-hypr') {
       setBindView(hasBindings ? 'details' : 'create');
       setExtendBindingName(null);
       setAddHyprBindingName(null);
@@ -3266,12 +3267,11 @@ const BindStep = ({
     [lockExpiryMs, transferEndDateMaxFallback],
   );
   const effectiveTransferEndDateMinMs = useMemo(() => {
-    const baseMin = transferEndDateMin.getTime();
     if (bindView === 'extend' && extendBindingUnlockMs !== null) {
-      const buffered = extendBindingUnlockMs + 60_000;
-      return Math.max(buffered, baseMin);
+      // Live min: current binding expiry + 1s
+      return extendBindingUnlockMs + 1_000;
     }
-    return baseMin;
+    return transferEndDateMin.getTime();
   }, [bindView, extendBindingUnlockMs, transferEndDateMin]);
   const effectiveTransferEndDateMaxMs = useMemo(() => {
     const raw = transferEndDateMax.getTime();
@@ -3506,21 +3506,7 @@ const BindStep = ({
     !transferExceedsAvailable;
   const transferDateEnabled =
     shouldShowTransferEndInputs && effectiveTransferEndDateMaxMs >= effectiveTransferEndDateMinMs;
-  const transferRangeCollapsed =
-    transferDateEnabled &&
-    effectiveTransferEndDateMinMs + COLLAPSE_BUFFER_MS >= effectiveTransferEndDateMaxMs;
-  useEffect(() => {
-    if (!transferRangeCollapsed) return;
-    const minDate = new Date(effectiveTransferEndDateMinMs);
-    setTransferEndDateInput(minDate);
-    setTransferEndTimeInput(formatTimeFromDate(minDate));
-    setTransferEndTimeDirty(true);
-    setTransferDurationDirty(true);
-    setTransferMobileDuration('');
-    setTransferMobileDateChoice(null);
-    setTransferCustomDateMs(null);
-    setShowTransferCustomModal(false);
-  }, [effectiveTransferEndDateMinMs, transferRangeCollapsed]);
+  const transferRangeCollapsed = false;
   const handleTransferCustomCancel = () => {
     setShowTransferCustomModal(false);
     setTransferCustomDateMs(null);
@@ -4527,7 +4513,13 @@ const iconGlyph: Record<StepIcon, string> = {
   chain: '⛓',
 };
 
-const formatDateIsoInput = (date: Date) => date.toISOString().slice(0, 10);
+// Use local date (not UTC) for date input prefill to avoid off-by-one-day shifts
+const formatDateIsoInput = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 const formatDateIso = (date: Date) => {
   const monthNames = [
