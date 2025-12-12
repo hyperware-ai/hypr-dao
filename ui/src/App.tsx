@@ -926,14 +926,18 @@ function App() {
                 <div className="step-info">
                   <div className="step-heading-row">
                     {activeStepTitle ? <h2 className="step-heading">{activeStepTitle}</h2> : <span />}
-                    <button
-                      type="button"
-                      className="refresh-inline-button"
-                      disabled={isLoading}
-                      onClick={handleManualRefresh}
-                    >
-                      {isLoading ? <span className="spinner" /> : refreshAck ? '✓ Refreshed' : 'Refresh values'}
-                    </button>
+                    {walletConnected ? (
+                      <button
+                        type="button"
+                        className="refresh-inline-button"
+                        disabled={isLoading}
+                        onClick={handleManualRefresh}
+                      >
+                        {isLoading ? <span className="spinner" /> : refreshAck ? '✓ Refreshed' : 'Refresh values'}
+                      </button>
+                    ) : (
+                      <span />
+                    )}
                   </div>
                   {stepDescription ? <p className="step-description">{stepDescription}</p> : null}
                 </div>
