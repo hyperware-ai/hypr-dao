@@ -1613,13 +1613,13 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     const amountWei = additionalAmountWei;
     const allowanceWei = lockAllowance ? BigInt(lockAllowance.amount_raw_wei) : 0n;
     const needsAllowanceTopUp = amountWei > allowanceWei;
-    let submittedDurationSeconds = effectiveSelectedLockDurationSeconds;
+    let submittedDurationSeconds = lockDurationForValidation;
     if (hasExistingLock && amountWei > 0n) {
       const requiredDuration = calculateRequiredAdditionalDuration(
         existingAmountWei,
         currentRemainingSeconds,
         amountWei,
-        effectiveSelectedLockDurationSeconds,
+        lockDurationForValidation,
       );
       if (!requiredDuration) {
         pushManageError(
@@ -1984,61 +1984,70 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     lockMinDurationSecondsForValidation,
     selectedLockDurationSeconds,
   ]);
+  const lockCustomActive = useMemo(
+    () => isMobile && !!lockCustomDateMs && !!lockMobileDateChoice,
+    [isMobile, lockCustomDateMs, lockMobileDateChoice],
+  );
+  const lockRawCustomDurationSeconds = useMemo(() => {
+    if (!lockCustomActive || !lockCustomDateMs) return null;
+    return BigInt(Math.max(0, Math.floor((lockCustomDateMs - nowMs) / 1000) + 1));
+  }, [lockCustomActive, lockCustomDateMs, nowMs]);
+  const lockDurationForValidation =
+    lockCustomActive && lockRawCustomDurationSeconds !== null
+      ? lockRawCustomDurationSeconds
+      : effectiveSelectedLockDurationSeconds;
   const hasValidEndDate =
-    effectiveSelectedLockDurationSeconds >= BigInt(lockMinDurationSecondsForValidation) &&
-    effectiveSelectedLockDurationSeconds <= BigInt(lockMaxDurationSecondsForValidation) &&
-    effectiveSelectedLockDurationSeconds <= BigInt(MAX_LOCK_DURATION_SECONDS);
+    lockDurationForValidation >= BigInt(lockMinDurationSecondsForValidation) &&
+    lockDurationForValidation <= BigInt(lockMaxDurationSecondsForValidation) &&
+    lockDurationForValidation <= BigInt(MAX_LOCK_DURATION_SECONDS);
   const durationLessThanExisting =
-    zeroAmountExtendingOnly && effectiveSelectedLockDurationSeconds < currentRemainingSeconds;
+    zeroAmountExtendingOnly && lockDurationForValidation < currentRemainingSeconds;
   const requiredDurationSeconds = useMemo(() => {
     if (!hasExistingLock || additionalAmountWei <= 0n) {
-      return effectiveSelectedLockDurationSeconds;
+      return lockDurationForValidation;
     }
     return (
       calculateRequiredAdditionalDuration(
         existingAmountWei,
         currentRemainingSeconds,
         additionalAmountWei,
-        effectiveSelectedLockDurationSeconds,
-      ) ?? effectiveSelectedLockDurationSeconds
+        lockDurationForValidation,
+      ) ?? lockDurationForValidation
     );
   }, [
     additionalAmountWei,
-    effectiveSelectedLockDurationSeconds,
     existingAmountWei,
     currentRemainingSeconds,
     hasExistingLock,
+    lockDurationForValidation,
   ]);
-  // When a custom date is active on mobile, keep the duration synced each second to the fixed timestamp
+  // When a custom date is active on mobile, keep the raw duration synced each second to the fixed timestamp
   useEffect(() => {
-    if (!isMobile) return;
-    if (!lockCustomDateMs) return;
+    if (!lockCustomActive || !lockCustomDateMs) return;
     if (!lockMobileDateChoice || lockMobileDateChoice === '') return;
     const rawSeconds = Math.max(0, Math.floor((lockCustomDateMs - nowMs) / 1000) + 1);
-    const clampedSeconds = Math.min(
-      Math.max(rawSeconds, lockMinDurationSecondsForValidation),
-      lockMaxDurationSecondsForValidation,
-    );
-    const clampedBig = BigInt(clampedSeconds);
-    if (selectedLockDurationSeconds !== clampedBig) {
-      setDurationInputs(durationInputsFromSeconds(clampedBig));
+    const rawBig = BigInt(rawSeconds);
+    if (selectedLockDurationSeconds !== rawBig) {
+      setDurationInputs(durationInputsFromSeconds(rawBig));
     }
     const nextDate = new Date(lockCustomDateMs);
     setLockEndDateInput(nextDate);
     setLockEndTimeInput(formatTimeFromDate(nextDate));
   }, [
     formatTimeFromDate,
-    isMobile,
+    lockCustomActive,
     lockCustomDateMs,
-    lockMaxDurationSecondsForValidation,
-    lockMinDurationSecondsForValidation,
     lockMobileDateChoice,
     nowMs,
     selectedLockDurationSeconds,
   ]);
   const lockPreviewMs = useMemo(() => {
-    if (effectiveSelectedLockDurationSeconds <= 0n) return null;
-    const durMs = Number(effectiveSelectedLockDurationSeconds) * 1000;
+    const previewSeconds =
+      lockCustomActive && lockRawCustomDurationSeconds !== null
+        ? lockRawCustomDurationSeconds
+        : effectiveSelectedLockDurationSeconds;
+    if (previewSeconds <= 0n) return null;
+    const durMs = Number(previewSeconds) * 1000;
     const minMs = actualMinMsForView;
     const maxMs = maxMsForView;
     const target = nowMs + durMs;
@@ -3596,35 +3605,40 @@ const BindStep = ({
     () => durationPartsToSeconds(inputsToDurationParts(transferDurationInputs)),
     [transferDurationInputs],
   );
+  const transferCustomActive = useMemo(
+    () => isMobile && !!transferCustomDateMs && !!transferMobileDateChoice,
+    [isMobile, transferCustomDateMs, transferMobileDateChoice],
+  );
+  const transferRawCustomDurationSeconds = useMemo(() => {
+    if (!transferCustomActive || !transferCustomDateMs) return null;
+    return BigInt(Math.max(0, Math.floor((transferCustomDateMs - nowMs) / 1000) + 1));
+  }, [nowMs, transferCustomActive, transferCustomDateMs]);
   const selectedTransferDurationSeconds =
     transferDurationMode === 'duration'
       ? transferDurationSecondsFromInputs
       : transferEndDateDurationSeconds ?? 0n;
-  // When a custom date is active on mobile, keep the duration synced each second to the fixed timestamp
+  const transferDurationForValidation =
+    transferCustomActive && transferRawCustomDurationSeconds !== null
+      ? transferRawCustomDurationSeconds
+      : selectedTransferDurationSeconds;
+  // When a custom date is active on mobile, keep the raw duration synced each second to the fixed timestamp
   useEffect(() => {
-    if (!isMobile) return;
-    if (!transferCustomDateMs) return;
+    if (!transferCustomActive || !transferCustomDateMs) return;
     if (!transferMobileDateChoice || transferMobileDateChoice === '') return;
     const rawSeconds = Math.max(0, Math.floor((transferCustomDateMs - nowMs) / 1000) + 1);
-    const clampedSeconds = Math.min(
-      Math.max(rawSeconds, transferMinDurationSeconds),
-      transferMaxDurationSeconds,
-    );
-    const clampedBig = BigInt(clampedSeconds);
-    if (selectedTransferDurationSeconds !== clampedBig) {
-      setTransferDurationInputs(durationInputsFromSeconds(clampedBig));
+    const rawBig = BigInt(rawSeconds);
+    if (selectedTransferDurationSeconds !== rawBig) {
+      setTransferDurationInputs(durationInputsFromSeconds(rawBig));
     }
     const nextDate = new Date(transferCustomDateMs);
     setTransferEndDateInput(nextDate);
     setTransferEndTimeInput(formatTimeFromDate(nextDate));
   }, [
     formatTimeFromDate,
-    isMobile,
     nowMs,
     selectedTransferDurationSeconds,
+    transferCustomActive,
     transferCustomDateMs,
-    transferMaxDurationSeconds,
-    transferMinDurationSeconds,
     transferMobileDateChoice,
   ]);
   // If user chooses the live MIN duration in bind extend mode, keep it in sync (do not mark dirty)
@@ -3665,22 +3679,25 @@ const BindStep = ({
     if (bindView === 'add-hypr') return true;
     if (destinationIsDefault) return false;
     // Duration-first: validate only the selected duration for create/add/extend
-    if (selectedTransferDurationSeconds <= 0n) return false;
-    const seconds = Number(selectedTransferDurationSeconds);
+    if (transferDurationForValidation <= 0n) return false;
+    const seconds = Number(transferDurationForValidation);
     if (seconds < transferMinDurationSeconds) return false;
     // No maximum enforcement per request; still keep hints populated elsewhere
     return true;
   }, [
     bindView,
     destinationIsDefault,
-    selectedTransferDurationSeconds,
+    transferDurationForValidation,
     transferMinDurationSeconds,
   ]);
   // Compute a preview end timestamp; if duration meets/exceeds max, pin to max target timestamp (stable);
   // if at/below min, use live min; else use now + duration.
   const transferPreviewMs = useMemo(() => {
-    if (selectedTransferDurationSeconds <= 0n) return null;
-    const durMs = Number(selectedTransferDurationSeconds) * 1000;
+    const previewSeconds = transferCustomActive && transferRawCustomDurationSeconds !== null
+      ? transferRawCustomDurationSeconds
+      : selectedTransferDurationSeconds;
+    if (previewSeconds <= 0n) return null;
+    const durMs = Number(previewSeconds) * 1000;
     const minMs = transferMinDurationSeconds * 1000;
     const maxMs = transferMaxDurationSeconds * 1000;
     if (durMs >= maxMs) return effectiveTransferEndDateMaxMs;
@@ -4117,11 +4134,15 @@ const BindStep = ({
       }
 
       const minDurationBigInt = BigInt(transferMinDurationSeconds);
-      if (selectedTransferDurationSeconds < minDurationBigInt) {
+      const durationForSubmit =
+        transferCustomActive && transferRawCustomDurationSeconds !== null
+          ? transferRawCustomDurationSeconds
+          : selectedTransferDurationSeconds;
+      if (durationForSubmit < minDurationBigInt) {
         pushTransferError(`Duration must be at least ${formatDurationSeconds(transferMinDurationSeconds)}.`);
         return;
       }
-      if (selectedTransferDurationSeconds > BigInt(MAX_LOCK_DURATION_SECONDS)) {
+      if (durationForSubmit > BigInt(MAX_LOCK_DURATION_SECONDS)) {
         pushTransferError(
           `Duration must be less than or equal to ${formatDurationSeconds(MAX_LOCK_DURATION_SECONDS)}.`,
         );
