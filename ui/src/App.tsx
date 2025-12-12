@@ -32,7 +32,7 @@ interface BannerMessage {
 const steps: StepConfig[] = [
   {
     id: 'approve',
-    title: 'Approve',
+    title: 'Grant',
     description: '',
     icon: 'check',
   },
@@ -554,6 +554,9 @@ function App() {
   }, [isWalletConnected, reconnect]);
 
   const walletConnected = Boolean(isWalletConnected && address);
+  const [refreshAck, setRefreshAck] = useState(false);
+  const refreshAckTriggerRef = useRef(false);
+  const refreshAckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchLockStatusForWallet = useCallback(async () => {
     if (walletConnected && address) {
@@ -564,8 +567,33 @@ function App() {
   const refreshLockStatusForWallet = useCallback(async () => {
     if (walletConnected && address) {
       await refreshLockStatusRaw(address);
+      if (refreshAckTriggerRef.current) {
+        setRefreshAck(true);
+        refreshAckTriggerRef.current = false;
+        if (refreshAckTimeoutRef.current) {
+          clearTimeout(refreshAckTimeoutRef.current);
+        }
+        refreshAckTimeoutRef.current = setTimeout(() => {
+          setRefreshAck(false);
+          refreshAckTimeoutRef.current = null;
+        }, 1200);
+      }
     }
   }, [walletConnected, address, refreshLockStatusRaw]);
+
+  const handleManualRefresh = useCallback(async () => {
+    refreshAckTriggerRef.current = true;
+    await refreshLockStatusForWallet();
+  }, [refreshLockStatusForWallet]);
+
+  useEffect(() => {
+    return () => {
+      if (refreshAckTimeoutRef.current) {
+        clearTimeout(refreshAckTimeoutRef.current);
+        refreshAckTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const refreshOnResume = () => {
@@ -902,9 +930,9 @@ function App() {
                       type="button"
                       className="refresh-inline-button"
                       disabled={isLoading}
-                      onClick={refreshLockStatusForWallet}
+                      onClick={handleManualRefresh}
                     >
-                      {isLoading ? <span className="spinner" /> : 'Refresh values'}
+                      {isLoading ? <span className="spinner" /> : refreshAck ? '✓ Refreshed' : 'Refresh values'}
                     </button>
                   </div>
                   {stepDescription ? <p className="step-description">{stepDescription}</p> : null}
@@ -1118,8 +1146,10 @@ const LockStep = ({
   const durationParts = useMemo(() => inputsToDurationParts(durationInputs), [durationInputs]);
   const lockedAmountWei = lockDetails?.amount_raw_wei ? BigInt(lockDetails.amount_raw_wei) : 0n;
   const hasExistingLock = lockedAmountWei > 0n;
-  const displayLockView =
+  const displayLockView: LockView =
     hasExistingLock && lockView === 'manage' && !userSetLockView ? 'details' : lockView;
+  const isLockExtendView = displayLockView === 'extend';
+  const isLockManageView = displayLockView === 'manage';
   const lockAvailableWei = lockAllowance?.amount_raw_wei ? BigInt(lockAllowance.amount_raw_wei) : 0n;
   const lockRemainingUnknown = (lockDetails?.remaining_seconds ?? 0) === Number.MAX_SAFE_INTEGER;
   const lockRemainingSecondsLive = useMemo(() => {
@@ -1726,7 +1756,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     setShowLockCustomModal(false);
   };
 
-  const lockHeaderSubtitle = 'Lock some or all of your approved HYPR to use in bindings and to enable DAO voting rights.';
+  const lockHeaderSubtitle = 'Direct the Registry to lock some or all of your HYPR to enable DAO voting rights and HYPR bindings.';
   const allowZeroAmount = lockView === 'extend';
   const amountProvided = amountInput !== '';
   const amountValue = amountProvided ? Number(amountInput) : 0;
@@ -2166,7 +2196,8 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     if (isMobile && lockView === 'manage' && hasExistingLock) {
       const baseSeconds = Number(currentRemainingSeconds);
       if (baseSeconds <= 0) return [];
-      const minSeconds = Math.max(0, manageMinDurationSeconds ?? minLockDurationSeconds);
+      const rawMinSeconds = Math.max(0, manageMinDurationSeconds ?? minLockDurationSeconds);
+      const minSeconds = Math.min(rawMinSeconds, baseSeconds);
       const maxSeconds = Math.max(minSeconds, manageMaxDurationSeconds ?? baseSeconds);
       const deltas: { label: string; seconds: number }[] = [
         { label: '-3 years', seconds: 3 * SECONDS_PER_YEAR },
@@ -2194,27 +2225,28 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
         }
       });
       const currentSeconds = baseSeconds;
-      if (currentSeconds >= minSeconds && currentSeconds <= maxSeconds) {
-        candidates.push({ label: 'NO CHANGE', seconds: currentSeconds, value: '__current__' });
-      }
+      candidates.push({ label: 'NO CHANGE', seconds: currentSeconds, value: '__current__' });
       const dedup = new Map<number, { label: string; seconds: number; value: string }>();
       candidates
         .sort((a, b) => a.seconds - b.seconds)
         .forEach((opt) => {
-          if (!dedup.has(opt.seconds)) {
-            dedup.set(opt.seconds, opt);
+          if (dedup.has(opt.seconds)) {
+            dedup.delete(opt.seconds);
           }
+          dedup.set(opt.seconds, opt);
         });
       return Array.from(dedup.values());
     }
     if (!isMobile) return MOBILE_DURATION_OPTIONS;
-    const minSeconds = lockMinSecondsForOptions;
+    const rawMinSeconds = lockMinSecondsForOptions;
     const nowMsLocal = nowMs;
-    const maxSeconds = Math.max(minSeconds, Math.round((maxMsForView - nowMsLocal) / 1000));
     const currentDurationSeconds =
       hasExistingLock && lockDetails?.unlock_timestamp
         ? Math.max(0, lockDetails.unlock_timestamp - nowSeconds)
         : null;
+    const minSeconds =
+      currentDurationSeconds !== null ? Math.min(rawMinSeconds, currentDurationSeconds) : rawMinSeconds;
+    const maxSeconds = Math.max(minSeconds, Math.round((maxMsForView - nowMsLocal) / 1000));
     const inRange = MOBILE_DURATION_OPTIONS.filter(
       (opt) => opt.seconds >= minSeconds && opt.seconds <= maxSeconds,
     );
@@ -2223,22 +2255,18 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
       ...inRange,
       { label: 'MAX duration', seconds: maxSeconds, value: '__max__' },
     ];
-    if (
-      lockView === 'manage' &&
-      hasExistingLock &&
-      currentDurationSeconds !== null &&
-      currentDurationSeconds >= minSeconds &&
-      currentDurationSeconds <= maxSeconds
-    ) {
-      candidates.push({ label: 'NO CHANGE', seconds: currentDurationSeconds, value: '__current__' });
+    if (lockView === 'manage' && hasExistingLock && currentDurationSeconds !== null) {
+      const clampedCurrentSeconds = Math.max(minSeconds, currentDurationSeconds);
+      candidates.push({ label: 'NO CHANGE', seconds: clampedCurrentSeconds, value: '__current__' });
     }
     const dedup = new Map<number, { label: string; seconds: number; value: string }>();
     candidates
       .sort((a, b) => a.seconds - b.seconds)
       .forEach((opt) => {
-        if (!dedup.has(opt.seconds)) {
-          dedup.set(opt.seconds, opt);
+        if (dedup.has(opt.seconds)) {
+          dedup.delete(opt.seconds);
         }
+        dedup.set(opt.seconds, opt);
       });
     return Array.from(dedup.values());
   }, [
@@ -2515,24 +2543,52 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                       : `${formatSeconds(lockRemainingSecondsLive)} remaining`}
                 </span>
                 {!lockExpired && (
-                  <span className="lock-card-sub actions-inline">
-                    <button
-                      type="button"
-                      className="pill-button"
-                      onClick={handleShowExtendPanel}
-                    >
-                      Extend lock
-                    </button>
-                    {lockAvailableWei > 0n && (
-                      <button
-                        type="button"
-                        className="pill-button"
-                        onClick={handleShowManagePanel}
-                      >
-                        Add HYPR
-                      </button>
+                  <>
+                    {isLockExtendView ? (
+                      <span className="lock-card-sub actions-inline">
+                        <button
+                          type="button"
+                          className="pill-button ghost inline-pill active"
+                          style={{ background: '#5457ff', color: '#fff' }}
+                          onClick={handleShowDetailsPanel}
+                        >
+                          Detail 1
+                        </button>
+                        {lockAvailableWei > 0n && (
+                          <button type="button" className="pill-button" onClick={handleShowManagePanel}>
+                            Add HYPR
+                          </button>
+                        )}
+                      </span>
+                    ) : isLockManageView ? (
+                      <span className="lock-card-sub actions-inline">
+                        <button type="button" className="pill-button" onClick={handleShowExtendPanel}>
+                          Extend lock
+                        </button>
+                        {lockAvailableWei > 0n && (
+                          <button
+                            type="button"
+                            className="pill-button ghost inline-pill active"
+                            style={{ background: '#6a7fff', color: '#fff' }}
+                            onClick={handleShowDetailsPanel}
+                          >
+                            Detail 2
+                          </button>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="lock-card-sub actions-inline">
+                        <button type="button" className="pill-button" onClick={handleShowExtendPanel}>
+                          Extend lock
+                        </button>
+                        {lockAvailableWei > 0n && (
+                          <button type="button" className="pill-button" onClick={handleShowManagePanel}>
+                            Add HYPR
+                          </button>
+                        )}
+                      </span>
                     )}
-                  </span>
+                  </>
                 )}
                 {lockExpired && (
                   <div className="inline-hint">
@@ -2583,7 +2639,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
 
       {(displayLockView === 'manage' || displayLockView === 'extend') && (
         <div className="lock-manage-stack">
-          {hasExistingLock && (
+          {hasExistingLock && displayLockView === 'extend' && (
             <div className="lock-detail-card">
               <div className="lock-card lock-detail-stat">
                 <span className="lock-card-label">Locked amount</span>
@@ -2601,6 +2657,71 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                       ? 'Unlocked'
                       : `${formatSeconds(lockRemainingSecondsLive)} remaining`}
                 </span>
+                {!lockExpired && (
+                  <span className="lock-card-sub actions-inline">
+                    <button
+                      type="button"
+                      className="pill-button"
+                      style={{ background: 'rgba(255, 255, 255, 0.12)' }}
+                      onClick={handleShowDetailsPanel}
+                    >
+                      Extend lock
+                    </button>
+                    {lockAvailableWei > 0n && (
+                      <button type="button" className="pill-button" onClick={handleShowManagePanel}>
+                        Add HYPR
+                      </button>
+                    )}
+                  </span>
+                )}
+                {lockExpired && (
+                  <div className="inline-hint">
+                    HYPR must be withdrawn from an expired lock to permit creation of a new lock.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          {hasExistingLock && displayLockView === 'manage' && (
+            <div className="lock-detail-card">
+              <div className="lock-card lock-detail-stat">
+                <span className="lock-card-label">Locked amount</span>
+                <span className="lock-card-value">{lockDetails?.amount_formatted_hypr ?? '0 HYPR'}</span>
+              </div>
+              <div className={`lock-card${lockExpired ? ' expired-card' : ''}`}>
+                <span className="lock-card-label">{lockExpired ? 'Lock expired at' : 'Lock expires at'}</span>
+                <span className="lock-card-value">
+                  {lockDetails ? formatTimestamp(lockDetails.unlock_timestamp) : '--'}
+                </span>
+                <span className="lock-card-sub">
+                  {lockRemainingUnknown
+                    ? 'Unknown remaining time'
+                    : lockExpired
+                      ? 'Unlocked'
+                      : `${formatSeconds(lockRemainingSecondsLive)} remaining`}
+                </span>
+                {!lockExpired && (
+                  <span className="lock-card-sub actions-inline">
+                    <button type="button" className="pill-button" onClick={handleShowExtendPanel}>
+                      Extend lock
+                    </button>
+                    {lockAvailableWei > 0n && (
+                      <button
+                        type="button"
+                        className="pill-button"
+                        style={{ background: 'rgba(255, 255, 255, 0.12)' }}
+                        onClick={handleShowDetailsPanel}
+                      >
+                        Add HYPR
+                      </button>
+                    )}
+                  </span>
+                )}
+                {lockExpired && (
+                  <div className="inline-hint">
+                    HYPR must be withdrawn from an expired lock to permit creation of a new lock.
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -2789,11 +2910,6 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                   ? 'Update Lock'
                   : 'Create Lock'}
             </button>
-            {hasExistingLock && (
-              <button type="button" className="secondary-button ghost" onClick={handleShowDetailsPanel}>
-                Cancel
-              </button>
-            )}
           </div>
           {waitingForManagePrompt && (
             <div className="lock-card-sub">
@@ -3111,9 +3227,9 @@ const ApproveStep = ({
         {!hasExistingApproval && (
           <div className="form-header">
             <div className="form-header-text">
-              <h3>{hasActiveLock ? 'Approve HYPR to enable additional locking' : 'Approve HYPR to enable locking'}</h3>
+              <h3>{hasActiveLock ? 'Grant additional locking rights to the HYPR Registry' : 'Grant locking rights to the HYPR Registry'}</h3>
               <p className="form-subtitle">
-                {hasActiveLock ? 'Approve only as much as you intend to add to your lock.' : 'Approve only as much as you intend to lock.'}
+                {hasActiveLock ? 'Approval is required for the Registry to lock additional HYPR. Approve only as much HYPR as you intend to add to your lock.' : 'Approval is required for the Registry to lock your HYPR. Approve only as much HYPR as you intend to lock.'}
               </p>
             </div>
           </div>
@@ -3126,7 +3242,7 @@ const ApproveStep = ({
                 <div className="approval-row">
                   <div className="lock-detail-stat">
                     <span className="lock-card-label">
-                      {hasActiveLock ? 'Amount approved to add to lock' : 'Amount approved to lock'}
+                      {hasActiveLock ? 'Amount approved for Registry to add to lock' : 'Amount approved for Registry to lock'}
                     </span>
                     <span className="lock-card-value">
                       {lockAllowance?.amount_formatted_hypr ?? '0'}{' '}
