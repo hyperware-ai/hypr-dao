@@ -1121,7 +1121,16 @@ const LockStep = ({
   const displayLockView =
     hasExistingLock && lockView === 'manage' && !userSetLockView ? 'details' : lockView;
   const lockAvailableWei = lockAllowance?.amount_raw_wei ? BigInt(lockAllowance.amount_raw_wei) : 0n;
-  const lockExpired = hasExistingLock && (lockDetails?.remaining_seconds ?? 0) === 0;
+  const lockRemainingUnknown = (lockDetails?.remaining_seconds ?? 0) === Number.MAX_SAFE_INTEGER;
+  const lockRemainingSecondsLive = useMemo(() => {
+    if (!hasExistingLock) return 0;
+    if (lockRemainingUnknown) return Number.MAX_SAFE_INTEGER;
+    if (lockDetails?.unlock_timestamp) {
+      return Math.max(0, lockDetails.unlock_timestamp - nowSeconds);
+    }
+    return lockDetails?.remaining_seconds ?? 0;
+  }, [hasExistingLock, lockDetails?.remaining_seconds, lockDetails?.unlock_timestamp, lockRemainingUnknown, nowSeconds]);
+  const lockExpired = hasExistingLock && !lockRemainingUnknown && lockRemainingSecondsLive === 0;
   useEffect(() => {
     // when lock existence changes (e.g., after refresh), allow default routing again
     setUserSetLockView(false);
@@ -2499,11 +2508,11 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
                 </span>
                 <span className="lock-card-value">{formatTimestamp(lockDetails.unlock_timestamp)}</span>
                 <span className="lock-card-sub">
-                  {lockDetails.remaining_seconds === Number.MAX_SAFE_INTEGER
+                  {lockRemainingUnknown
                     ? 'Unknown remaining time'
                     : lockExpired
                       ? 'Unlocked'
-                      : `${formatSeconds(lockDetails.remaining_seconds)} remaining`}
+                      : `${formatSeconds(lockRemainingSecondsLive)} remaining`}
                 </span>
                 {!lockExpired && (
                   <span className="lock-card-sub actions-inline">
@@ -2572,8 +2581,30 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
         </div>
       )}
 
-          {(displayLockView === 'manage' || displayLockView === 'extend') && (
-        <form className="lock-form" onSubmit={handleManageLock}>
+      {(displayLockView === 'manage' || displayLockView === 'extend') && (
+        <div className="lock-manage-stack">
+          {hasExistingLock && (
+            <div className="lock-detail-card">
+              <div className="lock-card lock-detail-stat">
+                <span className="lock-card-label">Locked amount</span>
+                <span className="lock-card-value">{lockDetails?.amount_formatted_hypr ?? '0 HYPR'}</span>
+              </div>
+              <div className={`lock-card${lockExpired ? ' expired-card' : ''}`}>
+                <span className="lock-card-label">{lockExpired ? 'Lock expired at' : 'Lock expires at'}</span>
+                <span className="lock-card-value">
+                  {lockDetails ? formatTimestamp(lockDetails.unlock_timestamp) : '--'}
+                </span>
+                <span className="lock-card-sub">
+                  {lockRemainingUnknown
+                    ? 'Unknown remaining time'
+                    : lockExpired
+                      ? 'Unlocked'
+                      : `${formatSeconds(lockRemainingSecondsLive)} remaining`}
+                </span>
+              </div>
+            </div>
+          )}
+          <form className="lock-form" onSubmit={handleManageLock}>
           <div className="form-header">
             <div className="form-header-text">
               <h3>
@@ -2780,6 +2811,7 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
             </div>
           )}
         </form>
+        </div>
       )}
 
       {lastError && <div className="inline-error">{lastError}</div>}
