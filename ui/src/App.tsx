@@ -2009,6 +2009,33 @@ const handleLockDurationInputChange = (field: DurationField, value: string) => {
     currentRemainingSeconds,
     hasExistingLock,
   ]);
+  // When a custom date is active on mobile, keep the duration synced each second to the fixed timestamp
+  useEffect(() => {
+    if (!isMobile) return;
+    if (!lockCustomDateMs) return;
+    if (!lockMobileDateChoice || lockMobileDateChoice === '') return;
+    const rawSeconds = Math.max(0, Math.floor((lockCustomDateMs - nowMs) / 1000) + 1);
+    const clampedSeconds = Math.min(
+      Math.max(rawSeconds, lockMinDurationSecondsForValidation),
+      lockMaxDurationSecondsForValidation,
+    );
+    const clampedBig = BigInt(clampedSeconds);
+    if (selectedLockDurationSeconds !== clampedBig) {
+      setDurationInputs(durationInputsFromSeconds(clampedBig));
+    }
+    const nextDate = new Date(lockCustomDateMs);
+    setLockEndDateInput(nextDate);
+    setLockEndTimeInput(formatTimeFromDate(nextDate));
+  }, [
+    formatTimeFromDate,
+    isMobile,
+    lockCustomDateMs,
+    lockMaxDurationSecondsForValidation,
+    lockMinDurationSecondsForValidation,
+    lockMobileDateChoice,
+    nowMs,
+    selectedLockDurationSeconds,
+  ]);
   const lockPreviewMs = useMemo(() => {
     if (effectiveSelectedLockDurationSeconds <= 0n) return null;
     const durMs = Number(effectiveSelectedLockDurationSeconds) * 1000;
@@ -3573,6 +3600,33 @@ const BindStep = ({
     transferDurationMode === 'duration'
       ? transferDurationSecondsFromInputs
       : transferEndDateDurationSeconds ?? 0n;
+  // When a custom date is active on mobile, keep the duration synced each second to the fixed timestamp
+  useEffect(() => {
+    if (!isMobile) return;
+    if (!transferCustomDateMs) return;
+    if (!transferMobileDateChoice || transferMobileDateChoice === '') return;
+    const rawSeconds = Math.max(0, Math.floor((transferCustomDateMs - nowMs) / 1000) + 1);
+    const clampedSeconds = Math.min(
+      Math.max(rawSeconds, transferMinDurationSeconds),
+      transferMaxDurationSeconds,
+    );
+    const clampedBig = BigInt(clampedSeconds);
+    if (selectedTransferDurationSeconds !== clampedBig) {
+      setTransferDurationInputs(durationInputsFromSeconds(clampedBig));
+    }
+    const nextDate = new Date(transferCustomDateMs);
+    setTransferEndDateInput(nextDate);
+    setTransferEndTimeInput(formatTimeFromDate(nextDate));
+  }, [
+    formatTimeFromDate,
+    isMobile,
+    nowMs,
+    selectedTransferDurationSeconds,
+    transferCustomDateMs,
+    transferMaxDurationSeconds,
+    transferMinDurationSeconds,
+    transferMobileDateChoice,
+  ]);
   // If user chooses the live MIN duration in bind extend mode, keep it in sync (do not mark dirty)
   useEffect(() => {
     if (bindView !== 'extend') return;
@@ -3742,7 +3796,7 @@ const BindStep = ({
     const durationSeconds = Math.max(0, Math.round(delta / 1000));
     setTransferDurationInputs(durationInputsFromSeconds(BigInt(durationSeconds)));
     setTransferDurationMode('duration');
-    setTransferDurationDirty(false);
+    setTransferDurationDirty(true);
     // Mark custom selection so defaulting logic does not overwrite with MIN
     setTransferMobileDuration('__custom__');
     setShowTransferCustomModal(false);
