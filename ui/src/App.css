@@ -610,7 +610,8 @@
 
 .bottom-tab.tab-approve.active .tab-title,
 .bottom-tab.tab-lock.active .tab-title,
-.bottom-tab.tab-bind.active .tab-title {
+.bottom-tab.tab-bind.active .tab-title,
+.bottom-tab.tab-vote.active .tab-title {
   font-weight: 750;
   font-size: 1.05rem;
 }

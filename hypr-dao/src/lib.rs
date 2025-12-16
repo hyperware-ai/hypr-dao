@@ -1,7 +1,8 @@
 use alloy_primitives::{Address as EthAddress, FixedBytes, U256};
 use hyperware_process_lib::{
     bindings::{Bindings, LockDetails as OnchainLockDetails, RegistrationDetails},
-    eth::Provider,
+    dao::DaoContracts,
+    eth::{BlockNumberOrTag, Provider},
     homepage::add_to_homepage,
     our, println, Message, Request,
 };
@@ -18,6 +19,16 @@ const LOCAL_CHAIN_ID: u64 = 31337;
 const LOCAL_TOKEN_REGISTRY: &str = "0x0000000000e8d224B902632757d5dbc51a451456";
 #[cfg(feature = "simulation-mode")]
 const LOCAL_TOKEN_REGISTRY: &str = "0x326Aa6822847B97a8387445a497e01253aC6E82B";
+
+#[cfg(not(feature = "simulation-mode"))]
+const LOCAL_TIMELOCK: &str = "0xf98286f69a3a401F41c36c02A464128A0f0dD593";
+#[cfg(feature = "simulation-mode")]
+const LOCAL_TIMELOCK: &str = "0xf98286f69a3a401F41c36c02A464128A0f0dD593";
+
+#[cfg(not(feature = "simulation-mode"))]
+const LOCAL_GOVERNOR: &str = "0x45d8B75bb9A961E88486C470bcf8aa13E506Ec9B";
+#[cfg(feature = "simulation-mode")]
+const LOCAL_GOVERNOR: &str = "0x45d8B75bb9A961E88486C470bcf8aa13E506Ec9B";
 
 #[cfg(not(feature = "simulation-mode"))]
 const MIN_LOCK_DURATION_SECONDS: u64 = 4 * 7 * 24 * 60 * 60;
@@ -60,6 +71,16 @@ struct BindDetailsView {
     amount_formatted_hypr: String,
     unlock_timestamp: u64,
     remaining_seconds: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+struct ProposalView {
+    proposal_id: String,
+    proposer: String,
+    description: String,
+    start_block: u64,
+    end_block: u64,
+    state: u8,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -142,8 +163,8 @@ impl HyprDaoState {
 
     #[http]
     async fn get_lock_status_for(&mut self, address: String) -> Result<LockStatusPayload, String> {
-        let parsed =
-            EthAddress::from_str(&address).map_err(|_| "invalid owner address provided".to_string())?;
+        let parsed = EthAddress::from_str(&address)
+            .map_err(|_| "invalid owner address provided".to_string())?;
         // Update the tracked owner to the requested address and refresh using existing logic.
         self.owner_address = Some(format_address(parsed));
         self.refresh_lock_state(Some(parsed))?;
@@ -166,8 +187,8 @@ impl HyprDaoState {
         &mut self,
         address: String,
     ) -> Result<LockStatusPayload, String> {
-        let parsed =
-            EthAddress::from_str(&address).map_err(|_| "invalid owner address provided".to_string())?;
+        let parsed = EthAddress::from_str(&address)
+            .map_err(|_| "invalid owner address provided".to_string())?;
         self.owner_address = Some(format_address(parsed));
         match self.refresh_lock_state(Some(parsed)) {
             Ok(_) => Ok(self.current_status()),
@@ -176,6 +197,56 @@ impl HyprDaoState {
                 Err(err)
             }
         }
+    }
+
+    #[http]
+    async fn get_proposal(&self, proposal_id: String) -> Result<ProposalView, String> {
+        let dao = Self::dao_client()?;
+        let parsed_id = parse_u256(&proposal_id)?;
+        let state = dao
+            .proposal_state(parsed_id)
+            .map_err(|err| format!("unable to fetch proposal state: {err:?}"))?;
+        let start_block = dao
+            .proposal_snapshot(parsed_id)
+            .map_err(|err| format!("unable to fetch proposal snapshot: {err:?}"))?;
+        let end_block = dao
+            .proposal_deadline(parsed_id)
+            .map_err(|err| format!("unable to fetch proposal deadline: {err:?}"))?;
+        let mut description = String::new();
+        if let Ok(events) = dao.fetch_proposals_created(Some(BlockNumberOrTag::Earliest), None) {
+            if let Some(found) = events.into_iter().find(|e| e.proposal_id == parsed_id) {
+                description = found.description;
+            }
+        }
+        Ok(ProposalView {
+            proposal_id: parsed_id.to_string(),
+            proposer: String::new(),
+            description,
+            start_block: u256_to_u64(&start_block),
+            end_block: u256_to_u64(&end_block),
+            state,
+        })
+    }
+
+    #[http]
+    async fn list_proposals(&self) -> Result<Vec<ProposalView>, String> {
+        let dao = Self::dao_client()?;
+        let events = dao
+            .fetch_proposals_created(Some(BlockNumberOrTag::Earliest), None)
+            .map_err(|err| format!("unable to fetch proposals: {err:?}"))?;
+        let mut proposals = Vec::new();
+        for event in events {
+            let state = dao.proposal_state(event.proposal_id).unwrap_or(u8::MAX);
+            proposals.push(ProposalView {
+                proposal_id: event.proposal_id.to_string(),
+                proposer: format_address(event.proposer),
+                description: event.description.clone(),
+                start_block: u256_to_u64(&event.start_block),
+                end_block: u256_to_u64(&event.end_block),
+                state,
+            });
+        }
+        Ok(proposals)
     }
 
     #[http]
@@ -289,6 +360,14 @@ impl HyprDaoState {
         Ok(Bindings::new(provider, address))
     }
 
+    fn dao_client() -> Result<DaoContracts, String> {
+        let provider = Provider::new(LOCAL_CHAIN_ID, 30);
+        let timelock = EthAddress::from_str(LOCAL_TIMELOCK)
+            .map_err(|_| "invalid timelock address".to_string())?;
+        let governor = EthAddress::from_str(LOCAL_GOVERNOR)
+            .map_err(|_| "invalid governor address".to_string())?;
+        Ok(DaoContracts::new(provider, timelock, governor))
+    }
 }
 
 impl From<OnchainLockDetails> for LockDetailsView {
@@ -343,6 +422,17 @@ fn format_hypr_amount(amount: &U256) -> String {
 
 fn u256_to_u64(value: &U256) -> u64 {
     value.try_into().unwrap_or(u64::MAX)
+}
+
+fn parse_u256(value: &str) -> Result<U256, String> {
+    if let Some(stripped) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        U256::from_str_radix(stripped, 16).map_err(|_| "invalid hex proposal id".to_string())
+    } else {
+        U256::from_str(value).map_err(|_| "invalid decimal proposal id".to_string())
+    }
 }
 
 fn format_namehash(hash: FixedBytes<32>) -> String {

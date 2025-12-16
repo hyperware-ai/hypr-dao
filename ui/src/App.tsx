@@ -9,12 +9,14 @@ import duration from 'human-duration';
 import './App.css';
 import { useBindAndLockStore } from './store/lock_and_bind';
 import type { BalanceView, BindingView, LockDetailsView } from './types/lock_and_bind';
+import type { ProposalSummary } from './types/proposals';
+import { fetchProposals } from './api/proposals';
 import { HyprDao as CallerApp } from '#caller-utils';
 
 const simulationMode = import.meta.env.VITE_SIMULATION_MODE === 'true';
 
-type StepId = 'approve' | 'lock' | 'bind';
-type StepIcon = 'check' | 'lock' | 'chain';
+type StepId = 'approve' | 'lock' | 'bind' | 'vote';
+type StepIcon = 'check' | 'lock' | 'chain' | 'vote';
 type LockView = 'details' | 'manage' | 'extend';
 
 interface StepConfig {
@@ -47,6 +49,12 @@ const steps: StepConfig[] = [
     title: 'Bind',
     description: '',
     icon: 'chain',
+  },
+  {
+    id: 'vote',
+    title: 'Vote',
+    description: '',
+    icon: 'vote',
   },
 ];
 
@@ -110,6 +118,17 @@ const ZERO_NAMEHASH = '0x0000000000000000000000000000000000000000000000000000000
 const CHAIN_LABELS: Record<number, string> = {
   [base.id]: 'Base',
 };
+const PROPOSAL_STATE_LABELS: Record<number, string> = {
+  0: 'Pending',
+  1: 'Active',
+  2: 'Canceled',
+  3: 'Defeated',
+  4: 'Succeeded',
+  5: 'Queued',
+  6: 'Expired',
+  7: 'Executed',
+};
+const proposalStateLabel = (state: number) => PROPOSAL_STATE_LABELS[state] ?? 'Unknown';
 const FALLBACK_CHAIN_ID =
   import.meta.env.VITE_SIMULATION_MODE === 'true' || import.meta.env.MODE === 'development'
     ? anvil.id
@@ -466,6 +485,24 @@ function App() {
   const prevHasLock = useRef(false);
   const [connectPulse, setConnectPulse] = useState(false);
   const [desiredBindView, setDesiredBindView] = useState<BindView | null>(null);
+  const activeStepRef = useRef<StepId>('approve');
+  const [proposals, setProposals] = useState<ProposalSummary[] | null>(null);
+  const [isLoadingProposals, setIsLoadingProposals] = useState(false);
+  const [proposalError, setProposalError] = useState<string | null>(null);
+  const loadProposals = useCallback(async () => {
+    setIsLoadingProposals(true);
+    setProposalError(null);
+    try {
+      const result = await fetchProposals();
+      setProposals(result);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to load proposals';
+      setProposalError(message);
+      setProposals([]);
+    } finally {
+      setIsLoadingProposals(false);
+    }
+  }, []);
 
   const targetRegistryAddress = useMemo(() => {
     if (chain?.id && TOKEN_REGISTRY_ADDRESSES[chain.id]) {
@@ -567,6 +604,9 @@ function App() {
   const refreshLockStatusForWallet = useCallback(async () => {
     if (walletConnected && address) {
       await refreshLockStatusRaw(address);
+      if (activeStepRef.current === 'vote') {
+        void loadProposals();
+      }
       if (refreshAckTriggerRef.current) {
         setRefreshAck(true);
         refreshAckTriggerRef.current = false;
@@ -579,7 +619,7 @@ function App() {
         }, 1200);
       }
     }
-  }, [walletConnected, address, refreshLockStatusRaw]);
+  }, [walletConnected, address, refreshLockStatusRaw, loadProposals]);
 
   const handleManualRefresh = useCallback(async () => {
     refreshAckTriggerRef.current = true;
@@ -618,6 +658,9 @@ function App() {
   const lockedWei = lockDetails?.amount_raw_wei ? BigInt(lockDetails.amount_raw_wei) : 0n;
   const [activeStep, setActiveStep] = useState<StepId>('approve');
   const [initialStepResolved, setInitialStepResolved] = useState(false);
+  useEffect(() => {
+    activeStepRef.current = activeStep;
+  }, [activeStep]);
   const hasBalanceData = hyprOwned !== null;
   const hasHyprHoldings = (hyprOwned?.amount_raw_wei ? BigInt(hyprOwned.amount_raw_wei) : 0n) > 0n || lockedWei > 0n;
   const lockAllowanceWei = tokeregistryAllowance?.amount_raw_wei
@@ -637,6 +680,7 @@ function App() {
   const bindTabEnabled =
     (walletConnected ? contentReady && !lockExpired : true) &&
     ((availableToBind && availableToBind.amount_raw_wei !== '0') || bindings.length > 0 || !walletConnected);
+  const voteTabEnabled = bindTabEnabled;
 
   // Decide initial tab after we have lock data (or know we won't)
   useEffect(() => {
@@ -708,6 +752,11 @@ function App() {
     return () => clearInterval(id);
   }, [connectComplete, environmentReady, refreshLockStatusForWallet]);
 
+  useEffect(() => {
+    if (activeStep !== 'vote') return;
+    void loadProposals();
+  }, [activeStep, loadProposals]);
+
   const canAccessStep = (id: StepId) => {
     if (id === 'approve') {
       return approveTabEnabled;
@@ -717,6 +766,9 @@ function App() {
     }
     if (id === 'bind') {
       return bindTabEnabled;
+    }
+    if (id === 'vote') {
+      return voteTabEnabled;
     }
     return false;
   };
@@ -736,6 +788,10 @@ function App() {
     }
     if (id === 'bind') {
       // Bind is gray until user has a lock
+      return hasHyprHoldings;
+    }
+    if (id === 'vote') {
+      // Vote follows Bind availability
       return hasHyprHoldings;
     }
     return false;
@@ -844,11 +900,11 @@ function App() {
   };
 
   const stepDescription = useMemo(() => {
-    if (activeStep === 'approve' || activeStep === 'lock' || activeStep === 'bind') return '';
+    if (activeStep === 'approve' || activeStep === 'lock' || activeStep === 'bind' || activeStep === 'vote') return '';
     return steps.find((step) => step.id === activeStep)?.description ?? '';
   }, [activeStep]);
   const activeStepTitle = useMemo(() => {
-    if (activeStep === 'approve' || activeStep === 'lock' || activeStep === 'bind') return '';
+    if (activeStep === 'approve' || activeStep === 'lock' || activeStep === 'bind' || activeStep === 'vote') return '';
     return steps.find((step) => step.id === activeStep)?.title ?? '';
   }, [activeStep]);
 
@@ -1022,6 +1078,32 @@ function App() {
               bindCreatePop={createBindButtonPop}
               bindCreateShimmer={createBindButtonShimmer}
             />
+          )}
+          {activeStep === 'vote' && (
+            <section className="step-panel">
+              <div className="lock-card">
+                <span className="lock-card-label">Voting</span>
+                {isLoadingProposals && <span className="lock-card-sub">Loading proposals…</span>}
+                {proposalError && <span className="lock-card-sub">{proposalError}</span>}
+                {!isLoadingProposals && !proposalError && (proposals?.length ?? 0) === 0 && (
+                  <span className="lock-card-sub">No proposals found.</span>
+                )}
+              </div>
+              {proposals?.map((proposal) => (
+                <div className="lock-card" key={proposal.proposal_id}>
+                  <span className="lock-card-label">
+                    Proposal {proposal.proposal_id}
+                  </span>
+                  <span className="lock-card-value">
+                    {proposal.description || 'No description provided'}
+                  </span>
+                  <span className="lock-card-sub">
+                    State: {proposalStateLabel(proposal.state)} · Blocks {proposal.start_block} →{' '}
+                    {proposal.end_block}
+                  </span>
+                </div>
+              ))}
+            </section>
           )}
                     </>
                   )}
@@ -4337,13 +4419,13 @@ const BindStep = ({
   return (
     <section className="step-card lock-step">
         {walletConnected && (
-          <div className="lock-grid">
-            <div className="lock-card">
-              <div className="lock-card-label">HYPR available to bind</div>
-              <div className="lock-card-value">{availableToBind?.amount_formatted_hypr ?? '0 HYPR'}</div>
-            </div>
-          </div>
-        )}
+      <div className="lock-grid">
+        <div className="lock-card lock-detail-stat">
+          <div className="lock-card-label">HYPR available to bind</div>
+          <div className="lock-card-value">{availableToBind?.amount_formatted_hypr ?? '0 HYPR'}</div>
+        </div>
+      </div>
+    )}
 
       {bindView === 'details' && (
         <div className="lock-grid">
@@ -4870,6 +4952,7 @@ const iconGlyph: Record<StepIcon, string> = {
   check: '🆗',
   lock: '🔒',
   chain: '⛓',
+  vote: '✅',
 };
 
 // Use local date (not UTC) for date input prefill to avoid off-by-one-day shifts
