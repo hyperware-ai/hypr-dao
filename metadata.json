@@ -4,10 +4,11 @@
   "image": "https://raw.githubusercontent.com/hyperware-ai/lock-and-bind/abdf7e2754f80cd3c9122dc7cdefd152543eab1c/assets/hyperware-200.jpg",
   "properties": {
     "package_name": "hypr-dao",
-    "current_version": "0.1.3",
+    "current_version": "0.1.4",
     "publisher": "ware.hypr",
     "mirrors": ["ware.hypr", "nick.hypr", "nick1udwig.os"],
     "code_hashes": {
+      "0.1.4": "c3061fd87f8e24702c334b79a29fde626bcf976f1e8f0c2c754e8ed0fc56a59a",
       "0.1.3": "1e97a02eb66c2ad415d7f257e272780c9a0936280d58935d7d971174fb661350",
       "0.1.2": "54aeae80794cc3ecf2c527dd4b8bd2b27c95016bdf1b51b3da876d74c1b7c2d0",
       "0.1.1": "cff2133868043b42f501706b88e7dfa19ed304360020e2185d0652a21f7b75b2",
