@@ -10,9 +10,13 @@ import { useBindAndLockStore } from './store/lock_and_bind';
 import type { BalanceView, BindingView, LockDetailsView } from './types/lock_and_bind';
 import type { ProposalSummary } from './types/proposals';
 import type { VoteView } from './types/votes';
+import type { QuorumProgress } from './types/quorum';
+import type { VotingPowerAtSnapshot } from './types/voting_power';
 import { fetchProposals } from './api/proposals';
 import { fetchVotes } from './api/votes';
 import { fetchHasVoted } from './api/has_voted';
+import { fetchQuorumProgress } from './api/quorum';
+import { fetchVotingPower } from './api/voting_power';
 import { HyprDao as CallerApp } from '#caller-utils';
 
 const simulationMode = import.meta.env.VITE_SIMULATION_MODE === 'true';
@@ -536,6 +540,10 @@ function App() {
   const [votesLoading, setVotesLoading] = useState<Record<string, boolean>>({});
   const [votesError, setVotesError] = useState<Record<string, string | null>>({});
   const [hasVotedMap, setHasVotedMap] = useState<Record<string, boolean>>({});
+  const [quorumByProposal, setQuorumByProposal] = useState<Record<string, QuorumProgress>>({});
+  const [quorumError, setQuorumError] = useState<Record<string, string | null>>({});
+  const [votingPowerMap, setVotingPowerMap] = useState<Record<string, VotingPowerAtSnapshot>>({});
+  const [votingPowerError, setVotingPowerError] = useState<Record<string, string | null>>({});
   const [voteSubmittingId, setVoteSubmittingId] = useState<string | null>(null);
   const [voteSubmittedId, setVoteSubmittedId] = useState<string | null>(null);
   const [voteError, setVoteError] = useState<string | null>(null);
@@ -668,6 +676,25 @@ function App() {
               const hasVoted = await fetchHasVoted(proposalId, address);
               setHasVotedMap((prev) => ({ ...prev, [proposalId]: hasVoted }));
             }
+            try {
+              const quorum = await fetchQuorumProgress(proposalId);
+              setQuorumByProposal((prev) => ({ ...prev, [proposalId]: quorum }));
+              setQuorumError((prev) => ({ ...prev, [proposalId]: null }));
+            } catch (err: unknown) {
+              const message = err instanceof Error ? err.message : 'Failed to load quorum';
+              setQuorumError((prev) => ({ ...prev, [proposalId]: message }));
+            }
+            // Voting power only matters for active proposals; still cache for others when asked.
+            if (walletConnected && address && proposal.state === 1) {
+              try {
+                const vp = await fetchVotingPower(proposalId, address);
+                setVotingPowerMap((prev) => ({ ...prev, [proposalId]: vp }));
+                setVotingPowerError((prev) => ({ ...prev, [proposalId]: null }));
+              } catch (err: unknown) {
+                const message = err instanceof Error ? err.message : 'Failed to check voting power';
+                setVotingPowerError((prev) => ({ ...prev, [proposalId]: message }));
+              }
+            }
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : 'Failed to load votes';
             setVotesError((prev) => ({ ...prev, [proposalId]: message }));
@@ -764,7 +791,8 @@ function App() {
   const bindTabEnabled =
     (walletConnected ? contentReady && !lockExpired : true) &&
     ((availableToBind && availableToBind.amount_raw_wei !== '0') || bindings.length > 0 || !walletConnected);
-  const voteTabEnabled = walletConnected ? contentReady && lockedWei > 0n && !lockExpired : false;
+  // Vote tab is enabled whenever the wallet is connected to the expected chain.
+  const voteTabEnabled = Boolean(walletConnected && environmentReady);
 
   // Decide initial tab after we have lock data (or know we won't)
   useEffect(() => {
@@ -793,7 +821,7 @@ function App() {
   };
 
   useEffect(() => {
-    if (lockExpired && activeStep !== 'lock') {
+    if (lockExpired && activeStep !== 'lock' && activeStep !== 'vote') {
       setActiveStep('lock');
     }
   }, [lockExpired, activeStep]);
@@ -939,8 +967,8 @@ function App() {
       return hasHyprHoldings;
     }
     if (id === 'vote') {
-      // Vote follows Bind availability
-      return hasHyprHoldings;
+      // Vote stays visible; do not gray it out based on holdings
+      return false;
     }
     return false;
   };
@@ -1243,6 +1271,10 @@ function App() {
                 const votesLoadingForProposal = votesLoading[proposalId];
                 const votesErrorForProposal = votesError[proposalId];
                 const hasVoted = hasVotedMap[proposalId];
+                const quorum = quorumByProposal[proposalId];
+                const quorumErr = quorumError[proposalId];
+                const votingPower = votingPowerMap[proposalId];
+                const votingPowerErr = votingPowerError[proposalId];
                 const total = votesForProposal.reduce(
                   (acc, vote) => {
                     const weight = BigInt(vote.weight ?? '0');
@@ -1260,8 +1292,8 @@ function App() {
                 const totalVotes = total.for + total.against + total.abstain;
                 const pct = (value: bigint) =>
                   totalVotes === 0n
-                    ? '0%'
-                    : `${(Number((value * 10000n) / totalVotes) / 100).toFixed(2)}%`;
+                    ? '0.0%'
+                    : `${(Number((value * 10000n) / totalVotes) / 100).toFixed(1)}%`;
                 const highlightFor = total.for > total.against;
                 const highlightAgainst =
                   (total.against > total.for || (total.against === total.for && total.against > 0n && total.for > 0n));
@@ -1273,7 +1305,8 @@ function App() {
                   timingLine = `Voting begins in ~${humanizeTwoUnits(beginsIn)} · Voting closes in ~${humanizeTwoUnits(closesIn)}`;
                 } else if (proposal.state === 1) {
                   const closesIn = Math.max(0, proposal.end_block - nowSecondsLocal);
-                  timingLine = `Voting closes in ~${humanizeTwoUnits(closesIn)}`;
+                  const beganAt = formatDateTimeAmPmNoSeconds(proposal.start_block * 1000);
+                  timingLine = `Voting began at ${beganAt} · Voting closes in ~${humanizeTwoUnits(closesIn)}`;
                 } else if (proposal.state > 2) {
                   timingLine = `Voting closed at ${formatDateTimeAmPmNoSeconds(proposal.end_block * 1000)}`;
                 }
@@ -1282,6 +1315,7 @@ function App() {
                   walletConnected &&
                   lockedWei > 0n &&
                   !hasVoted &&
+                  (votingPower?.has_power ?? true) &&
                   !isVotePending &&
                   !isVoteConfirming;
                 const isSubmitting = voteSubmittingId === proposalId && (isVotePending || isVoteConfirming);
@@ -1306,6 +1340,20 @@ function App() {
                     </div>
                     {votesLoadingForProposal && <span className="lock-card-sub">Loading votes…</span>}
                     {votesErrorForProposal && <span className="lock-card-sub">{votesErrorForProposal}</span>}
+                    {quorum && (
+                      <span className="lock-card-sub">
+                        {quorum.percent >= 100
+                          ? `Quorum: achieved (${quorum.counted} / ${quorum.required})`
+                          : `Quorum: ${quorum.percent.toFixed(1)}% (${quorum.counted} / ${quorum.required})`}
+                      </span>
+                    )}
+                    {quorumErr && <span className="lock-card-sub">{quorumErr}</span>}
+                    {votingPowerErr && <span className="lock-card-sub">{votingPowerErr}</span>}
+                    {proposal.state === 1 && votingPower && !votingPower.has_power && (
+                      <span className="lock-card-sub">
+                        You had no locked HYPR at the start of the voting to allow you to participate.
+                      </span>
+                    )}
                     {canVote && (
                       <div className="vote-controls">
                         <button

@@ -35,6 +35,11 @@ const LOCAL_GOVERNOR: &str = "0x45d8B75bb9A961E88486C470bcf8aa13E506Ec9B";
 const LOCAL_GOVERNOR: &str = "0x45d8B75bb9A961E88486C470bcf8aa13E506Ec9B";
 
 #[cfg(not(feature = "simulation-mode"))]
+const LOCAL_VOTES_TOKEN: &str = "0xec48905Bb1714bbf3B6f56E49a8FA2299Bfa55f5";
+#[cfg(feature = "simulation-mode")]
+const LOCAL_VOTES_TOKEN: &str = "0xec48905Bb1714bbf3B6f56E49a8FA2299Bfa55f5";
+
+#[cfg(not(feature = "simulation-mode"))]
 const MIN_LOCK_DURATION_SECONDS: u64 = 4 * 7 * 24 * 60 * 60;
 #[cfg(feature = "simulation-mode")]
 const MIN_LOCK_DURATION_SECONDS: u64 = 4 * 60;
@@ -85,6 +90,19 @@ struct ProposalView {
     start_block: u64,
     end_block: u64,
     state: u8,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+struct QuorumProgress {
+    percent: f64,
+    bps: u64,
+    counted: String,
+    required: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+struct VotingPowerAtSnapshot {
+    has_power: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -259,6 +277,51 @@ impl HyprDaoState {
     }
 
     #[http]
+    async fn quorum_progress(&self, proposal_id: String) -> Result<QuorumProgress, String> {
+        let dao = Self::dao_client()?;
+        let parsed_id = parse_u256(&proposal_id)?;
+        // If the proposal is Pending, avoid calling quorum/snapshot (can revert or lack RPC).
+        let state = dao
+            .proposal_state(parsed_id)
+            .unwrap_or(u8::MAX);
+        if state == 0 {
+            return Ok(QuorumProgress {
+                percent: 0.0,
+                bps: 0,
+                counted: "0".to_string(),
+                required: "0".to_string(),
+            });
+        }
+        let (bps, counted, required) = match dao.quorum_progress_bps(parsed_id) {
+            Ok(res) => res,
+            Err(e) => {
+                // If RPC for quorum cannot be reached, return a safe default instead of bubbling error.
+                if e.contains("NoRpcForChain") {
+                    println!(
+                        "quorum_progress: NoRpcForChain for proposal {}, chain {}, returning 0",
+                        proposal_id, LOCAL_CHAIN_ID
+                    );
+                    (0, U256::ZERO, U256::ZERO)
+                } else {
+                    println!(
+                        "quorum_progress error for proposal {} on chain {}: {}",
+                        proposal_id, LOCAL_CHAIN_ID, e
+                    );
+                    return Err(format!("unable to compute quorum: {e}"));
+                }
+            }
+        };
+        let percent = bps as f64 / 100.0;
+        let bps_u64: u64 = bps.try_into().unwrap_or(u64::MAX);
+        Ok(QuorumProgress {
+            percent,
+            bps: bps_u64,
+            counted: counted.to_string(),
+            required: required.to_string(),
+        })
+    }
+
+    #[http]
     async fn list_proposals(&self) -> Result<Vec<ProposalView>, String> {
         let dao = Self::dao_client()?;
         let events = dao
@@ -286,6 +349,34 @@ impl HyprDaoState {
         let parsed_voter = EthAddress::from_str(&voter)
             .map_err(|_| "invalid voter address provided".to_string())?;
         check_has_voted(&dao, parsed_id, parsed_voter)
+    }
+
+    #[http]
+    async fn has_voting_power(&self, proposal_id: String, voter: String) -> Result<VotingPowerAtSnapshot, String> {
+        let dao = Self::dao_client()?;
+        let parsed_id = parse_u256(&proposal_id)?;
+        let parsed_voter = EthAddress::from_str(&voter)
+            .map_err(|_| "invalid voter address provided".to_string())?;
+        let has_power = match dao.has_power_at_snapshot(parsed_id, parsed_voter) {
+            Ok(val) => val,
+            Err(e) => {
+                // If voting power cannot be determined (e.g., NoRpcForChain), assume true to avoid false negatives.
+                if e.contains("NoRpcForChain") {
+                    println!(
+                        "has_voting_power: NoRpcForChain for proposal {}, voter {}, chain {}, treating as true",
+                        proposal_id, voter, LOCAL_CHAIN_ID
+                    );
+                    true
+                } else {
+                    println!(
+                        "has_voting_power error for proposal {} voter {} on chain {}: {}",
+                        proposal_id, voter, LOCAL_CHAIN_ID, e
+                    );
+                    return Err(format!("unable to check voting power: {e}"));
+                }
+            }
+        };
+        Ok(VotingPowerAtSnapshot { has_power })
     }
 
     #[http]
@@ -405,7 +496,9 @@ impl HyprDaoState {
             .map_err(|_| "invalid timelock address".to_string())?;
         let governor = EthAddress::from_str(LOCAL_GOVERNOR)
             .map_err(|_| "invalid governor address".to_string())?;
-        Ok(DaoContracts::new(provider, timelock, governor))
+        let votes_token = EthAddress::from_str(LOCAL_VOTES_TOKEN)
+            .map_err(|_| "invalid votes token address".to_string())?;
+        Ok(DaoContracts::new(provider, timelock, governor, votes_token))
     }
 }
 
