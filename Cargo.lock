@@ -1775,7 +1775,6 @@ dependencies = [
 [[package]]
 name = "hyperware_process_lib"
 version = "3.0.1"
-source = "git+https://github.com/hyperware-ai/process_lib.git?rev=7cf1aa2e9bcb442de4e933bb2afc681b9928a187#7cf1aa2e9bcb442de4e933bb2afc681b9928a187"
 dependencies = [
  "alloy",
  "alloy-primitives",
@@ -1808,6 +1807,8 @@ name = "hypr-dao"
 version = "0.1.0"
 dependencies = [
  "alloy-primitives",
+ "alloy-sol-macro",
+ "alloy-sol-types",
  "anyhow",
  "hyperapp_macro",
  "hyperware_process_lib",

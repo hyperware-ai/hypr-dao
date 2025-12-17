@@ -1,8 +1,12 @@
-use alloy_primitives::{Address as EthAddress, FixedBytes, U256};
+use hyperware_process_lib::eth::{Bytes, TransactionInput, TransactionRequest};
+use alloy_primitives::{Address as EthAddress, FixedBytes, B256, U256};
+use alloy_sol_macro::sol;
+use alloy_sol_types::SolCall;
+use alloy_sol_types::SolEvent;
 use hyperware_process_lib::{
     bindings::{Bindings, LockDetails as OnchainLockDetails, RegistrationDetails},
     dao::DaoContracts,
-    eth::{BlockNumberOrTag, Provider},
+    eth::{BlockNumberOrTag, Filter as EthFilter, Provider},
     homepage::add_to_homepage,
     our, println, Message, Request,
 };
@@ -21,9 +25,9 @@ const LOCAL_TOKEN_REGISTRY: &str = "0x0000000000e8d224B902632757d5dbc51a451456";
 const LOCAL_TOKEN_REGISTRY: &str = "0x326Aa6822847B97a8387445a497e01253aC6E82B";
 
 #[cfg(not(feature = "simulation-mode"))]
-const LOCAL_TIMELOCK: &str = "0xf98286f69a3a401F41c36c02A464128A0f0dD593";
+const LOCAL_TIMELOCK: &str = "0x9932d28523F7e6De60633776A787da61EA44174F";
 #[cfg(feature = "simulation-mode")]
-const LOCAL_TIMELOCK: &str = "0xf98286f69a3a401F41c36c02A464128A0f0dD593";
+const LOCAL_TIMELOCK: &str = "0x9932d28523F7e6De60633776A787da61EA44174F";
 
 #[cfg(not(feature = "simulation-mode"))]
 const LOCAL_GOVERNOR: &str = "0x45d8B75bb9A961E88486C470bcf8aa13E506Ec9B";
@@ -81,6 +85,24 @@ struct ProposalView {
     start_block: u64,
     end_block: u64,
     state: u8,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct VoteView {
+    voter: String,
+    support: u8,
+    weight: String,
+    reason: String,
+}
+
+sol! {
+    #[allow(non_camel_case_types)]
+    event VoteCast(address indexed voter, uint256 proposalId, uint8 support, uint256 weight, string reason);
+
+    #[allow(non_camel_case_types)]
+    contract GovernorHasVoted {
+        function hasVoted(uint256 proposalId, address account) external view returns (bool);
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -229,6 +251,14 @@ impl HyprDaoState {
     }
 
     #[http]
+    async fn get_votes(&self, proposal_id: String) -> Result<Vec<VoteView>, String> {
+        let dao = Self::dao_client()?;
+        let parsed_id = parse_u256(&proposal_id)?;
+        let votes = fetch_votes(&dao, parsed_id)?;
+        Ok(votes)
+    }
+
+    #[http]
     async fn list_proposals(&self) -> Result<Vec<ProposalView>, String> {
         let dao = Self::dao_client()?;
         let events = dao
@@ -247,6 +277,15 @@ impl HyprDaoState {
             });
         }
         Ok(proposals)
+    }
+
+    #[http]
+    async fn has_voted(&self, proposal_id: String, voter: String) -> Result<bool, String> {
+        let dao = Self::dao_client()?;
+        let parsed_id = parse_u256(&proposal_id)?;
+        let parsed_voter = EthAddress::from_str(&voter)
+            .map_err(|_| "invalid voter address provided".to_string())?;
+        check_has_voted(&dao, parsed_id, parsed_voter)
     }
 
     #[http]
@@ -368,6 +407,55 @@ impl HyprDaoState {
             .map_err(|_| "invalid governor address".to_string())?;
         Ok(DaoContracts::new(provider, timelock, governor))
     }
+}
+
+fn fetch_votes(dao: &DaoContracts, proposal_id: U256) -> Result<Vec<VoteView>, String> {
+    // Fetch all votes from earliest for this governor; proposalId is not indexed, so filter post-decode.
+    let topic0 = VoteCast::SIGNATURE_HASH;
+    let filter = EthFilter::new()
+        .address(dao.governor)
+        .event_signature(B256::from(topic0))
+        .from_block(BlockNumberOrTag::Earliest);
+    let logs = dao
+        .provider
+        .get_logs(&filter)
+        .map_err(|err| format!("unable to fetch vote logs: {err:?}"))?;
+    let mut out = Vec::new();
+    for log in logs {
+        let prim_log = log.inner.clone();
+        if let Ok(decoded) = VoteCast::decode_log(&prim_log, true) {
+            if decoded.proposalId == proposal_id {
+                out.push(VoteView {
+                    voter: format_address(decoded.voter),
+                    support: decoded.support,
+                    weight: decoded.weight.to_string(),
+                    reason: decoded.reason.clone(),
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn check_has_voted(
+    dao: &DaoContracts,
+    proposal_id: U256,
+    voter: EthAddress,
+) -> Result<bool, String> {
+    let call = GovernorHasVoted::hasVotedCall {
+        proposalId: proposal_id,
+        account: voter,
+    };
+    let tx_req = TransactionRequest::default()
+        .to(dao.governor)
+        .input(TransactionInput::new(Bytes::from(call.abi_encode())));
+    let res_bytes = dao
+        .provider
+        .call(tx_req, None)
+        .map_err(|err| format!("unable to call hasVoted: {err:?}"))?;
+    GovernorHasVoted::hasVotedCall::abi_decode_returns(&res_bytes, false)
+        .map(|ret| ret._0)
+        .map_err(|_| "malformed hasVoted response".to_string())
 }
 
 impl From<OnchainLockDetails> for LockDetailsView {

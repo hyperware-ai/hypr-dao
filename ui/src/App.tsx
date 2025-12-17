@@ -5,12 +5,14 @@ import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useReconnect, useWaitForTransactionReceipt, useWriteContract } from 'wagmi';
 import { base, anvil } from 'wagmi/chains';
 import { concatHex, keccak256, parseEther, stringToBytes } from 'viem';
-import duration from 'human-duration';
 import './App.css';
 import { useBindAndLockStore } from './store/lock_and_bind';
 import type { BalanceView, BindingView, LockDetailsView } from './types/lock_and_bind';
 import type { ProposalSummary } from './types/proposals';
+import type { VoteView } from './types/votes';
 import { fetchProposals } from './api/proposals';
+import { fetchVotes } from './api/votes';
+import { fetchHasVoted } from './api/has_voted';
 import { HyprDao as CallerApp } from '#caller-utils';
 
 const simulationMode = import.meta.env.VITE_SIMULATION_MODE === 'true';
@@ -61,6 +63,10 @@ const steps: StepConfig[] = [
 const TOKEN_REGISTRY_ADDRESSES: Record<number, `0x${string}`> = {
   [base.id]: '0x0000000000e8d224B902632757d5dbc51a451456',
   [anvil.id]: '0x326Aa6822847B97a8387445a497e01253aC6E82B',
+};
+const GOVERNOR_ADDRESSES: Record<number, `0x${string}`> = {
+  [base.id]: '0x45d8B75bb9A961E88486C470bcf8aa13E506Ec9B',
+  [anvil.id]: '0x45d8B75bb9A961E88486C470bcf8aa13E506Ec9B',
 };
 
 const showDiagnostics = import.meta.env.VITE_SHOW_DIAGNOSTICS === 'true';
@@ -113,6 +119,20 @@ const transferRegistrationAbi = [
   },
 ] as const;
 
+const governorAbi = [
+  {
+    type: 'function',
+    name: 'castVoteWithReason',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'proposalId', type: 'uint256' },
+      { name: 'support', type: 'uint8' },
+      { name: 'reason', type: 'string' },
+    ],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+] as const;
+
 const MAX_LOCK_DURATION_SECONDS = 4 * 52 * 7 * 24 * 60 * 60; // ~4 years
 const ZERO_NAMEHASH = '0x0000000000000000000000000000000000000000000000000000000000000000' as const;
 const CHAIN_LABELS: Record<number, string> = {
@@ -147,6 +167,29 @@ const normalizeToMinute = (ms: number) => {
   const d = new Date(ms);
   d.setSeconds(0, 0);
   return d.getTime();
+};
+const humanizeTwoUnits = (deltaSeconds: number) => {
+  const units: [string, number][] = [
+    ['year', SECONDS_PER_YEAR],
+    ['month', SECONDS_PER_MONTH],
+    ['week', SECONDS_PER_WEEK],
+    ['day', SECONDS_PER_DAY],
+    ['hour', SECONDS_PER_HOUR],
+    ['minute', SECONDS_PER_MINUTE],
+    ['second', 1],
+  ];
+  const parts: string[] = [];
+  let remaining = Math.max(0, deltaSeconds);
+  for (const [label, size] of units) {
+    if (remaining >= size) {
+      const qty = Math.floor(remaining / size);
+      parts.push(`${qty} ${label}${qty === 1 ? '' : 's'}`);
+      remaining = remaining % size;
+    }
+    if (parts.length === 2) break;
+  }
+  if (parts.length === 0) return '0 minutes';
+  return parts.join(' ');
 };
 
 type DurationField = 'years' | 'months' | 'weeks' | 'days' | 'hours' | 'minutes' | 'seconds';
@@ -489,26 +532,26 @@ function App() {
   const [proposals, setProposals] = useState<ProposalSummary[] | null>(null);
   const [isLoadingProposals, setIsLoadingProposals] = useState(false);
   const [proposalError, setProposalError] = useState<string | null>(null);
-  const loadProposals = useCallback(async () => {
-    setIsLoadingProposals(true);
-    setProposalError(null);
-    try {
-      const result = await fetchProposals();
-      setProposals(result);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to load proposals';
-      setProposalError(message);
-      setProposals([]);
-    } finally {
-      setIsLoadingProposals(false);
-    }
-  }, []);
+  const [votesByProposal, setVotesByProposal] = useState<Record<string, VoteView[]>>({});
+  const [votesLoading, setVotesLoading] = useState<Record<string, boolean>>({});
+  const [votesError, setVotesError] = useState<Record<string, string | null>>({});
+  const [hasVotedMap, setHasVotedMap] = useState<Record<string, boolean>>({});
+  const [voteSubmittingId, setVoteSubmittingId] = useState<string | null>(null);
+  const [voteSubmittedId, setVoteSubmittedId] = useState<string | null>(null);
+  const [voteError, setVoteError] = useState<string | null>(null);
+  const [voteErrorProposalId, setVoteErrorProposalId] = useState<string | null>(null);
 
   const targetRegistryAddress = useMemo(() => {
     if (chain?.id && TOKEN_REGISTRY_ADDRESSES[chain.id]) {
       return TOKEN_REGISTRY_ADDRESSES[chain.id];
     }
     return TOKEN_REGISTRY_ADDRESSES[base.id];
+  }, [chain?.id]);
+  const governorAddress = useMemo(() => {
+    if (chain?.id && GOVERNOR_ADDRESSES[chain.id]) {
+      return GOVERNOR_ADDRESSES[chain.id];
+    }
+    return GOVERNOR_ADDRESSES[FALLBACK_CHAIN_ID];
   }, [chain?.id]);
 
   useEffect(() => {
@@ -595,6 +638,63 @@ function App() {
   const refreshAckTriggerRef = useRef(false);
   const refreshAckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  useEffect(() => {
+    return () => {
+      if (refreshAckTimeoutRef.current) {
+        clearTimeout(refreshAckTimeoutRef.current);
+        refreshAckTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  const expectedChainId = useBindAndLockStore((state) => state.chainId) ?? FALLBACK_CHAIN_ID;
+  const expectedChainName = CHAIN_LABELS[expectedChainId] ?? `Chain ${expectedChainId}`;
+  const networkMismatch =
+    walletConnected && chain?.id !== undefined && chain.id !== expectedChainId;
+  const environmentReady = !networkMismatch;
+  const connectComplete = Boolean(walletConnected && environmentReady);
+  const loadVotesForProposals = useCallback(
+    async (list: ProposalSummary[] | null | undefined) => {
+      if (!list || list.length === 0) return;
+      await Promise.all(
+        list.map(async (proposal) => {
+          const proposalId = proposal.proposal_id;
+          setVotesLoading((prev) => ({ ...prev, [proposalId]: true }));
+          setVotesError((prev) => ({ ...prev, [proposalId]: null }));
+          try {
+            const votes = await fetchVotes(proposalId);
+            setVotesByProposal((prev) => ({ ...prev, [proposalId]: votes }));
+            if (walletConnected && address) {
+              const hasVoted = await fetchHasVoted(proposalId, address);
+              setHasVotedMap((prev) => ({ ...prev, [proposalId]: hasVoted }));
+            }
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : 'Failed to load votes';
+            setVotesError((prev) => ({ ...prev, [proposalId]: message }));
+          } finally {
+            setVotesLoading((prev) => ({ ...prev, [proposalId]: false }));
+          }
+        }),
+      );
+    },
+    [walletConnected, address],
+  );
+  const loadProposals = useCallback(async () => {
+    setIsLoadingProposals(true);
+    setProposalError(null);
+    try {
+      const result = await fetchProposals();
+      setProposals(result);
+      await loadVotesForProposals(result);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to load proposals';
+      setProposalError(message);
+      setProposals([]);
+    } finally {
+      setIsLoadingProposals(false);
+    }
+  }, [loadVotesForProposals]);
+
   const fetchLockStatusForWallet = useCallback(async () => {
     if (walletConnected && address) {
       await fetchLockStatus(address);
@@ -625,16 +725,6 @@ function App() {
     refreshAckTriggerRef.current = true;
     await refreshLockStatusForWallet();
   }, [refreshLockStatusForWallet]);
-
-  useEffect(() => {
-    return () => {
-      if (refreshAckTimeoutRef.current) {
-        clearTimeout(refreshAckTimeoutRef.current);
-        refreshAckTimeoutRef.current = null;
-      }
-    };
-  }, []);
-
   useEffect(() => {
     const refreshOnResume = () => {
       if (document.visibilityState === 'visible') {
@@ -648,15 +738,9 @@ function App() {
       document.removeEventListener('visibilitychange', refreshOnResume);
     };
   }, [refreshLockStatusForWallet]);
-
-  const expectedChainId = useBindAndLockStore((state) => state.chainId) ?? FALLBACK_CHAIN_ID;
-  const expectedChainName = CHAIN_LABELS[expectedChainId] ?? `Chain ${expectedChainId}`;
-  const networkMismatch =
-    walletConnected && chain?.id !== undefined && chain.id !== expectedChainId;
-  const environmentReady = !networkMismatch;
-  const connectComplete = Boolean(walletConnected && environmentReady);
   const lockedWei = lockDetails?.amount_raw_wei ? BigInt(lockDetails.amount_raw_wei) : 0n;
   const [activeStep, setActiveStep] = useState<StepId>('approve');
+  const nowMs = useCurrentTimeMs();
   const [initialStepResolved, setInitialStepResolved] = useState(false);
   useEffect(() => {
     activeStepRef.current = activeStep;
@@ -680,7 +764,7 @@ function App() {
   const bindTabEnabled =
     (walletConnected ? contentReady && !lockExpired : true) &&
     ((availableToBind && availableToBind.amount_raw_wei !== '0') || bindings.length > 0 || !walletConnected);
-  const voteTabEnabled = bindTabEnabled;
+  const voteTabEnabled = walletConnected ? contentReady && lockedWei > 0n && !lockExpired : false;
 
   // Decide initial tab after we have lock data (or know we won't)
   useEffect(() => {
@@ -735,6 +819,10 @@ function App() {
       setActiveStep(pickFallback());
       return;
     }
+    if (activeStep === 'vote' && !voteTabEnabled) {
+      setActiveStep(pickFallback());
+      return;
+    }
   }, [lockTabEnabled, bindTabEnabled, approveTabEnabled, activeStep]);
 
   useEffect(() => {
@@ -756,6 +844,66 @@ function App() {
     if (activeStep !== 'vote') return;
     void loadProposals();
   }, [activeStep, loadProposals]);
+  useEffect(() => {
+    if (!proposals || proposals.length === 0) return;
+    void loadVotesForProposals(proposals);
+  }, [proposals, loadVotesForProposals, walletConnected, address]);
+  const {
+    data: voteTxHash,
+    error: voteWriteError,
+    isPending: isVotePending,
+    writeContract: writeVoteContract,
+    reset: resetVoteWrite,
+  } = useWriteContract();
+
+  const { isLoading: isVoteConfirming, isSuccess: isVoteConfirmed } = useWaitForTransactionReceipt({
+    hash: voteTxHash,
+  });
+
+  useEffect(() => {
+    if (voteWriteError) {
+      const msg = getErrorMessage(voteWriteError);
+      setVoteError(msg);
+      setVoteErrorProposalId(voteSubmittingId);
+      setVoteSubmittingId(null);
+    }
+  }, [voteWriteError, voteSubmittingId]);
+
+  useEffect(() => {
+    if (isVoteConfirmed && voteSubmittingId) {
+      setVoteSubmittedId(voteSubmittingId);
+      setVoteSubmittingId(null);
+      setHasVotedMap((prev) => ({ ...prev, [voteSubmittingId]: true }));
+      void loadVotesForProposals(proposals);
+    }
+  }, [isVoteConfirmed, voteSubmittingId, loadVotesForProposals, proposals]);
+
+  const handleVote = useCallback(
+    (proposalId: string, support: number) => {
+      if (!governorAddress) return;
+      if (!proposalId) return;
+      resetVoteWrite();
+      setVoteError(null);
+      setVoteErrorProposalId(null);
+      setVoteSubmittedId(null);
+      setVoteSubmittingId(proposalId);
+      const reason = nodeId ?? 'unknown node';
+      try {
+        writeVoteContract({
+          address: governorAddress,
+          abi: governorAbi,
+          functionName: 'castVoteWithReason',
+          args: [BigInt(proposalId), support, reason],
+        });
+      } catch (err: unknown) {
+        const msg = getErrorMessage(err);
+        setVoteError(msg);
+        setVoteErrorProposalId(proposalId);
+        setVoteSubmittingId(null);
+      }
+    },
+    [governorAddress, nodeId, resetVoteWrite, writeVoteContract],
+  );
 
   const canAccessStep = (id: StepId) => {
     if (id === 'approve') {
@@ -1089,20 +1237,113 @@ function App() {
                   <span className="lock-card-sub">No proposals found.</span>
                 )}
               </div>
-              {proposals?.map((proposal) => (
-                <div className="lock-card" key={proposal.proposal_id}>
-                  <span className="lock-card-label">
-                    Proposal {proposal.proposal_id}
-                  </span>
-                  <span className="lock-card-value">
-                    {proposal.description || 'No description provided'}
-                  </span>
-                  <span className="lock-card-sub">
-                    State: {proposalStateLabel(proposal.state)} · Blocks {proposal.start_block} →{' '}
-                    {proposal.end_block}
-                  </span>
-                </div>
-              ))}
+              {proposals?.map((proposal) => {
+                const proposalId = proposal.proposal_id;
+                const votesForProposal = votesByProposal[proposalId] ?? [];
+                const votesLoadingForProposal = votesLoading[proposalId];
+                const votesErrorForProposal = votesError[proposalId];
+                const hasVoted = hasVotedMap[proposalId];
+                const total = votesForProposal.reduce(
+                  (acc, vote) => {
+                    const weight = BigInt(vote.weight ?? '0');
+                    if (vote.support === 1) {
+                      acc.for += weight;
+                    } else if (vote.support === 0) {
+                      acc.against += weight;
+                    } else {
+                      acc.abstain += weight;
+                    }
+                    return acc;
+                  },
+                  { for: 0n, against: 0n, abstain: 0n },
+                );
+                const totalVotes = total.for + total.against + total.abstain;
+                const pct = (value: bigint) =>
+                  totalVotes === 0n
+                    ? '0%'
+                    : `${(Number((value * 10000n) / totalVotes) / 100).toFixed(2)}%`;
+                const highlightFor = total.for > total.against;
+                const highlightAgainst =
+                  (total.against > total.for || (total.against === total.for && total.against > 0n && total.for > 0n));
+                const nowSecondsLocal = Math.floor(nowMs / 1000);
+                let timingLine: string | null = null;
+                if (proposal.state === 0) {
+                  const beginsIn = Math.max(0, proposal.start_block - nowSecondsLocal);
+                  const closesIn = Math.max(0, proposal.end_block - nowSecondsLocal);
+                  timingLine = `Voting begins in ~${humanizeTwoUnits(beginsIn)} · Voting closes in ~${humanizeTwoUnits(closesIn)}`;
+                } else if (proposal.state === 1) {
+                  const closesIn = Math.max(0, proposal.end_block - nowSecondsLocal);
+                  timingLine = `Voting closes in ~${humanizeTwoUnits(closesIn)}`;
+                } else if (proposal.state > 2) {
+                  timingLine = `Voting closed at ${formatDateTimeAmPmNoSeconds(proposal.end_block * 1000)}`;
+                }
+                const canVote =
+                  proposal.state === 1 &&
+                  walletConnected &&
+                  lockedWei > 0n &&
+                  !hasVoted &&
+                  !isVotePending &&
+                  !isVoteConfirming;
+                const isSubmitting = voteSubmittingId === proposalId && (isVotePending || isVoteConfirming);
+                return (
+                  <div className="lock-card" key={proposalId}>
+                    <span className="lock-card-label">Proposal {proposalId}</span>
+                    <span className="lock-card-value">
+                      {proposal.description || 'No description provided'}
+                    </span>
+                    <span className="lock-card-sub">State: {proposalStateLabel(proposal.state)}</span>
+                    {timingLine && <span className="lock-card-sub">{timingLine}</span>}
+                    <div className="lock-card-sub" style={{ marginTop: '0.25rem' }}>
+                      <span className="vote-summary" style={{ fontWeight: highlightAgainst ? 700 : 400 }}>
+                        Against {pct(total.against)}
+                      </span>
+                      {' · '}
+                      <span className="vote-summary" style={{ fontWeight: highlightFor ? 700 : 400 }}>
+                        For {pct(total.for)}
+                      </span>
+                      {' · '}
+                      <span className="vote-summary">Abstain {pct(total.abstain)}</span>
+                    </div>
+                    {votesLoadingForProposal && <span className="lock-card-sub">Loading votes…</span>}
+                    {votesErrorForProposal && <span className="lock-card-sub">{votesErrorForProposal}</span>}
+                    {canVote && (
+                      <div className="vote-controls">
+                        <button
+                          type="button"
+                          className="pill-button inline-pill"
+                          disabled={isSubmitting}
+                          onClick={() => handleVote(proposalId, 0)}
+                        >
+                          {isSubmitting && voteSubmittingId === proposalId ? 'Submitting…' : 'Against'}
+                        </button>
+                        <button
+                          type="button"
+                          className="pill-button inline-pill"
+                          disabled={isSubmitting}
+                          onClick={() => handleVote(proposalId, 1)}
+                        >
+                          {isSubmitting && voteSubmittingId === proposalId ? 'Submitting…' : 'For'}
+                        </button>
+                        <button
+                          type="button"
+                          className="pill-button inline-pill"
+                          disabled={isSubmitting}
+                          onClick={() => handleVote(proposalId, 2)}
+                        >
+                          {isSubmitting && voteSubmittingId === proposalId ? 'Submitting…' : 'Abstain'}
+                        </button>
+                      </div>
+                    )}
+                    {hasVoted && <span className="lock-card-sub">You have already voted.</span>}
+                    {voteSubmittedId === proposalId && (
+                      <span className="lock-card-sub">Vote submitted successfully.</span>
+                    )}
+                    {voteErrorProposalId === proposalId && voteError && (
+                      <span className="lock-card-sub">{voteError}</span>
+                    )}
+                  </div>
+                );
+              })}
             </section>
           )}
                     </>
@@ -4927,7 +5168,7 @@ const BottomTabs = ({
       let animClass = '';
       if (step.id === 'lock') {
         animClass = `${lockPopAnimation ? ' bind-button-pop' : ''}${lockShimmer ? ' bind-button-shimmer' : ''}`;
-      } else if (step.id === 'bind') {
+      } else if (step.id === 'bind' || step.id === 'vote') {
         animClass = `${bindPopAnimation ? ' bind-button-pop' : ''}${bindShimmer ? ' bind-button-shimmer' : ''}`;
       }
       return (
@@ -5239,6 +5480,15 @@ const formatDateTimeAmPm = (ms: number) => {
   return `${formatDateIso(d)} ${pad(hours12)}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${ampm}`;
 };
 
+const formatDateTimeAmPmNoSeconds = (ms: number) => {
+  const d = new Date(ms);
+  const pad = (v: number) => v.toString().padStart(2, '0');
+  const hours24 = d.getHours();
+  const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
+  const ampm = hours24 >= 12 ? 'PM' : 'AM';
+  return `${formatDateIso(d)} ${pad(hours12)}:${pad(d.getMinutes())} ${ampm}`;
+};
+
 const formatTimestamp = (seconds: number) => {
   if (!seconds) return '0';
   if (seconds === Number.MAX_SAFE_INTEGER) return 'Unknown';
@@ -5253,7 +5503,7 @@ const formatMsWithSeconds = (ms: number | null | undefined) => {
 
 const formatSeconds = (value: number) => {
   if (value <= 0) return '0s';
-  return duration.fmt(value * 1000).segments(2);
+  return humanizeTwoUnits(value);
 };
 
 const isHexHash = (value: string): value is `0x${string}` =>
@@ -5282,7 +5532,7 @@ const resolveNamehash = (input: string): `0x${string}` => {
 
 const formatDurationSeconds = (seconds: number) => {
   if (seconds <= 0) return '0 seconds';
-  return duration.fmt(seconds * 1000).segments(2);
+  return humanizeTwoUnits(seconds);
 };
 
 const secondsUntilDate = (target: Date | null, baseSeconds: number) => {

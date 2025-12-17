@@ -1,5 +1,7 @@
 [dependencies]
-alloy-primitives = "0.8.15"
+alloy-primitives = "=0.8.26"
+alloy-sol-macro = "=0.8.26"
+alloy-sol-types = "=0.8.26"
 anyhow = "1.0"
 hyperapp_macro = "0.2.0"
 process_macros = "0.1"
