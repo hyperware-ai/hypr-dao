@@ -25,9 +25,9 @@ const LOCAL_TOKEN_REGISTRY: &str = "0x0000000000e8d224B902632757d5dbc51a451456";
 const LOCAL_TOKEN_REGISTRY: &str = "0x326Aa6822847B97a8387445a497e01253aC6E82B";
 
 #[cfg(not(feature = "simulation-mode"))]
-const LOCAL_TIMELOCK: &str = "0x9932d28523F7e6De60633776A787da61EA44174F";
+const LOCAL_TIMELOCK: &str = "0xb7Dcc6Ce8efFD80Fc26f0FD1A5C226C3c53f6D8F";
 #[cfg(feature = "simulation-mode")]
-const LOCAL_TIMELOCK: &str = "0x9932d28523F7e6De60633776A787da61EA44174F";
+const LOCAL_TIMELOCK: &str = "0xb7Dcc6Ce8efFD80Fc26f0FD1A5C226C3c53f6D8F";
 
 #[cfg(not(feature = "simulation-mode"))]
 const LOCAL_GOVERNOR: &str = "0x45d8B75bb9A961E88486C470bcf8aa13E506Ec9B";
@@ -90,6 +90,10 @@ struct ProposalView {
     start_block: u64,
     end_block: u64,
     state: u8,
+    queued_at: u64,
+    execute_after: u64,
+    min_delay_seconds: u64,
+    executed_at: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -258,6 +262,37 @@ impl HyprDaoState {
                 description = found.description;
             }
         }
+        let mut queued_at: u64 = 0;
+        let mut execute_after: u64 = 0;
+        let mut min_delay_seconds: u64 = 0;
+        let mut executed_at: u64 = 0;
+        if let Ok(delay) = dao.timelock_delay() {
+            min_delay_seconds = u256_to_u64(&delay);
+        }
+        if let Ok(eta) = dao.proposal_eta(parsed_id) {
+            let eta_u64 = u256_to_u64(&eta);
+            execute_after = eta_u64;
+            queued_at = eta_u64.saturating_sub(min_delay_seconds);
+        }
+        if state == 5 && (execute_after == 0 || execute_after <= queued_at) {
+            if let Ok(delay) = dao.timelock_delay() {
+                min_delay_seconds = u256_to_u64(&delay);
+            }
+            if let Ok(eta) = dao.proposal_eta(parsed_id) {
+                let eta_u64 = u256_to_u64(&eta);
+                execute_after = eta_u64;
+                queued_at = eta_u64.saturating_sub(min_delay_seconds);
+            }
+        }
+        if executed_at == 0 {
+          if let Ok(executed) = dao.fetch_proposals_executed(Some(BlockNumberOrTag::Earliest), None) {
+            if let Some(found) = executed.into_iter().find(|e| e.proposal_id == parsed_id) {
+              if let Ok(ts) = dao.block_timestamp(found.block_number) {
+                executed_at = ts;
+              }
+            }
+          }
+        }
         Ok(ProposalView {
             proposal_id: parsed_id.to_string(),
             proposer: String::new(),
@@ -265,6 +300,10 @@ impl HyprDaoState {
             start_block: u256_to_u64(&start_block),
             end_block: u256_to_u64(&end_block),
             state,
+            queued_at,
+            execute_after,
+            min_delay_seconds,
+            executed_at,
         })
     }
 
@@ -330,6 +369,37 @@ impl HyprDaoState {
         let mut proposals = Vec::new();
         for event in events {
             let state = dao.proposal_state(event.proposal_id).unwrap_or(u8::MAX);
+            let mut queued_at: u64 = 0;
+            let mut execute_after: u64 = 0;
+            let mut min_delay_seconds: u64 = 0;
+            let mut executed_at: u64 = 0;
+            if let Ok(delay) = dao.timelock_delay() {
+                min_delay_seconds = u256_to_u64(&delay);
+            }
+            if let Ok(eta) = dao.proposal_eta(event.proposal_id) {
+                let eta_u64 = u256_to_u64(&eta);
+                execute_after = eta_u64;
+                queued_at = eta_u64.saturating_sub(min_delay_seconds);
+            }
+            if state == 5 && (execute_after == 0 || execute_after <= queued_at) {
+                if let Ok(delay) = dao.timelock_delay() {
+                    min_delay_seconds = u256_to_u64(&delay);
+                }
+                if let Ok(eta) = dao.proposal_eta(event.proposal_id) {
+                    let eta_u64 = u256_to_u64(&eta);
+                    execute_after = eta_u64;
+                    queued_at = eta_u64.saturating_sub(min_delay_seconds);
+                }
+            }
+            if executed_at == 0 {
+              if let Ok(executed) = dao.fetch_proposals_executed(Some(BlockNumberOrTag::Earliest), None) {
+                if let Some(found) = executed.into_iter().find(|e| e.proposal_id == event.proposal_id) {
+                  if let Ok(ts) = dao.block_timestamp(found.block_number) {
+                    executed_at = ts;
+                  }
+                }
+              }
+            }
             proposals.push(ProposalView {
                 proposal_id: event.proposal_id.to_string(),
                 proposer: format_address(event.proposer),
@@ -337,6 +407,10 @@ impl HyprDaoState {
                 start_block: u256_to_u64(&event.start_block),
                 end_block: u256_to_u64(&event.end_block),
                 state,
+                queued_at,
+                execute_after,
+                min_delay_seconds,
+                executed_at,
             });
         }
         Ok(proposals)

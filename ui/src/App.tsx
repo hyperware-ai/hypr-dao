@@ -647,6 +647,12 @@ function App() {
   const refreshAckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    if (!walletConnected) {
+      setVoteSubmittedId(null);
+    }
+  }, [walletConnected]);
+
+  useEffect(() => {
     return () => {
       if (refreshAckTimeoutRef.current) {
         clearTimeout(refreshAckTimeoutRef.current);
@@ -1298,17 +1304,60 @@ function App() {
                 const highlightAgainst =
                   (total.against > total.for || (total.against === total.for && total.against > 0n && total.for > 0n));
                 const nowSecondsLocal = Math.floor(nowMs / 1000);
-                let timingLine: string | null = null;
+                let timingLines: string[] = [];
                 if (proposal.state === 0) {
                   const beginsIn = Math.max(0, proposal.start_block - nowSecondsLocal);
                   const closesIn = Math.max(0, proposal.end_block - nowSecondsLocal);
-                  timingLine = `Voting begins in ~${humanizeTwoUnits(beginsIn)} · Voting closes in ~${humanizeTwoUnits(closesIn)}`;
+                  timingLines = [
+                    `Voting begins in ~${humanizeTwoUnits(beginsIn)}`,
+                    `Voting closes in ~${humanizeTwoUnits(closesIn)}`,
+                  ];
                 } else if (proposal.state === 1) {
                   const closesIn = Math.max(0, proposal.end_block - nowSecondsLocal);
                   const beganAt = formatDateTimeAmPmNoSeconds(proposal.start_block * 1000);
-                  timingLine = `Voting began at ${beganAt} · Voting closes in ~${humanizeTwoUnits(closesIn)}`;
+                  timingLines = [
+                    `Voting began at ${beganAt}`,
+                    `Voting closes in ~${humanizeTwoUnits(closesIn)}`,
+                  ];
                 } else if (proposal.state > 2) {
-                  timingLine = `Voting closed at ${formatDateTimeAmPmNoSeconds(proposal.end_block * 1000)}`;
+                  if (proposal.state === 7) {
+                    const executedAtSeconds =
+                      (proposal.executed_at && proposal.executed_at > 0
+                        ? proposal.executed_at
+                        : proposal.execute_after && proposal.execute_after > 0
+                          ? proposal.execute_after
+                          : proposal.end_block) || 0;
+                    const executedAtMs = executedAtSeconds * 1000;
+                    timingLines = [`Proposal executed at ${formatDateTimeAmPmNoSeconds(executedAtMs)}`];
+                  } else if (proposal.state === 5) {
+                    // If min_delay is missing/zero, fall back to 1200s (known timelock default) to avoid collapsing timestamps.
+                    const minDelay =
+                      proposal.min_delay_seconds && proposal.min_delay_seconds > 0 ? proposal.min_delay_seconds : 1200;
+                    // Prefer authoritative execute_after; fallback to queued_at + delay, then end_block + delay.
+                    const executeAfterSeconds =
+                      proposal.execute_after && proposal.execute_after > 0
+                        ? proposal.execute_after
+                        : proposal.queued_at && proposal.queued_at > 0
+                          ? proposal.queued_at + minDelay
+                          : proposal.end_block + minDelay;
+                    // Prefer authoritative queued_at; fallback to execute_after - delay (but not below 0), then end_block.
+                    const queuedAtSeconds =
+                      proposal.queued_at && proposal.queued_at > 0
+                        ? proposal.queued_at
+                        : executeAfterSeconds > minDelay
+                          ? executeAfterSeconds - minDelay
+                          : proposal.end_block;
+                    const queuedAtMs = queuedAtSeconds * 1000;
+                    const executeAfterMs = executeAfterSeconds * 1000;
+                    timingLines.push(
+                      `Successful proposal queued for execution at ${formatDateTimeAmPmNoSeconds(queuedAtMs)}`,
+                    );
+                    timingLines.push(
+                      `Execution permitted after ${formatDateTimeAmPmNoSeconds(executeAfterMs)}`,
+                    );
+                  } else {
+                    timingLines = [`Voting closed at ${formatDateTimeAmPmNoSeconds(proposal.end_block * 1000)}`];
+                  }
                 }
                 const canVote =
                   proposal.state === 1 &&
@@ -1321,12 +1370,18 @@ function App() {
                 const isSubmitting = voteSubmittingId === proposalId && (isVotePending || isVoteConfirming);
                 return (
                   <div className="lock-card" key={proposalId}>
-                    <span className="lock-card-label">Proposal {proposalId}</span>
+                    <span className="lock-card-label" style={{ wordBreak: 'break-word' }}>
+                      Proposal {proposalId}
+                    </span>
                     <span className="lock-card-value">
                       {proposal.description || 'No description provided'}
                     </span>
                     <span className="lock-card-sub">State: {proposalStateLabel(proposal.state)}</span>
-                    {timingLine && <span className="lock-card-sub">{timingLine}</span>}
+                    {timingLines.map((line, idx) => (
+                      <span className="lock-card-sub" key={idx}>
+                        {line}
+                      </span>
+                    ))}
                     <div className="lock-card-sub" style={{ marginTop: '0.25rem' }}>
                       <span className="vote-summary" style={{ fontWeight: highlightAgainst ? 700 : 400 }}>
                         Against {pct(total.against)}
@@ -1343,12 +1398,18 @@ function App() {
                     {quorum && (
                       <span className="lock-card-sub">
                         {quorum.percent >= 100
-                          ? `Quorum: achieved (${quorum.counted} / ${quorum.required})`
-                          : `Quorum: ${quorum.percent.toFixed(1)}% (${quorum.counted} / ${quorum.required})`}
+                          ? 'Quorum (For + Abstain): achieved'
+                          : `Quorum (For + Abstain): ${quorum.percent.toFixed(1)}%`}
                       </span>
                     )}
                     {quorumErr && <span className="lock-card-sub">{quorumErr}</span>}
                     {votingPowerErr && <span className="lock-card-sub">{votingPowerErr}</span>}
+                    {proposal.state === 0 && walletConnected && lockedWei === 0n && (
+                      <span className="lock-card-sub">
+                        You must have HYPR locked at {formatDateTimeAmPmNoSeconds(proposal.start_block * 1000)} to vote on
+                        this proposal.
+                      </span>
+                    )}
                     {proposal.state === 1 && votingPower && !votingPower.has_power && (
                       <span className="lock-card-sub">
                         You had no locked HYPR at the start of the voting to allow you to participate.
@@ -1382,7 +1443,23 @@ function App() {
                         </button>
                       </div>
                     )}
-                    {hasVoted && <span className="lock-card-sub">You have already voted.</span>}
+                    {hasVoted && votesForProposal.length > 0 && (
+                      <span className="lock-card-sub">
+                        You voted{' '}
+                        {(() => {
+                          const mine = votesForProposal.find(
+                            (v) => v.voter.toLowerCase() === (address ?? '').toLowerCase(),
+                          );
+                          if (!mine) return 'on this proposal.';
+                          if (mine.support === 0) return 'Against on this proposal.';
+                          if (mine.support === 1) return 'For on this proposal.';
+                          return 'Abstain on this proposal.';
+                        })()}
+                      </span>
+                    )}
+                    {hasVoted && votesForProposal.length === 0 && (
+                      <span className="lock-card-sub">You voted on this proposal.</span>
+                    )}
                     {voteSubmittedId === proposalId && (
                       <span className="lock-card-sub">Vote submitted successfully.</span>
                     )}
