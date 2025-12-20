@@ -173,6 +173,11 @@ const normalizeToMinute = (ms: number) => {
   return d.getTime();
 };
 const humanizeTwoUnits = (deltaSeconds: number) => {
+  const bounded = Math.max(0, Math.floor(deltaSeconds));
+  if (bounded < 60) {
+    const label = bounded === 1 ? 'second' : 'seconds';
+    return `${bounded} ${label}`;
+  }
   const units: [string, number][] = [
     ['year', SECONDS_PER_YEAR],
     ['month', SECONDS_PER_MONTH],
@@ -183,7 +188,7 @@ const humanizeTwoUnits = (deltaSeconds: number) => {
     ['second', 1],
   ];
   const parts: string[] = [];
-  let remaining = Math.max(0, deltaSeconds);
+  let remaining = bounded;
   for (const [label, size] of units) {
     if (remaining >= size) {
       const qty = Math.floor(remaining / size);
@@ -192,7 +197,7 @@ const humanizeTwoUnits = (deltaSeconds: number) => {
     }
     if (parts.length === 2) break;
   }
-  if (parts.length === 0) return '0 minutes';
+  if (parts.length === 0) return '0s';
   return parts.join(' ');
 };
 
@@ -534,10 +539,9 @@ function App() {
   const [desiredBindView, setDesiredBindView] = useState<BindView | null>(null);
   const activeStepRef = useRef<StepId>('approve');
   const [proposals, setProposals] = useState<ProposalSummary[] | null>(null);
-  const [isLoadingProposals, setIsLoadingProposals] = useState(false);
+  const [_isLoadingProposals, setIsLoadingProposals] = useState(false);
   const [proposalError, setProposalError] = useState<string | null>(null);
   const [votesByProposal, setVotesByProposal] = useState<Record<string, VoteView[]>>({});
-  const [votesLoading, setVotesLoading] = useState<Record<string, boolean>>({});
   const [votesError, setVotesError] = useState<Record<string, string | null>>({});
   const [hasVotedMap, setHasVotedMap] = useState<Record<string, boolean>>({});
   const [quorumByProposal, setQuorumByProposal] = useState<Record<string, QuorumProgress>>({});
@@ -545,6 +549,7 @@ function App() {
   const [votingPowerMap, setVotingPowerMap] = useState<Record<string, VotingPowerAtSnapshot>>({});
   const [votingPowerError, setVotingPowerError] = useState<Record<string, string | null>>({});
   const [voteSubmittingId, setVoteSubmittingId] = useState<string | null>(null);
+  const lastVoteProposalIdRef = useRef<string | null>(null);
   const [voteSubmittedId, setVoteSubmittedId] = useState<string | null>(null);
   const [voteError, setVoteError] = useState<string | null>(null);
   const [voteErrorProposalId, setVoteErrorProposalId] = useState<string | null>(null);
@@ -673,7 +678,6 @@ function App() {
       await Promise.all(
         list.map(async (proposal) => {
           const proposalId = proposal.proposal_id;
-          setVotesLoading((prev) => ({ ...prev, [proposalId]: true }));
           setVotesError((prev) => ({ ...prev, [proposalId]: null }));
           try {
             const votes = await fetchVotes(proposalId);
@@ -705,7 +709,7 @@ function App() {
             const message = err instanceof Error ? err.message : 'Failed to load votes';
             setVotesError((prev) => ({ ...prev, [proposalId]: message }));
           } finally {
-            setVotesLoading((prev) => ({ ...prev, [proposalId]: false }));
+            // no-op
           }
         }),
       );
@@ -756,6 +760,7 @@ function App() {
 
   const handleManualRefresh = useCallback(async () => {
     refreshAckTriggerRef.current = true;
+    setRefreshAck(false);
     await refreshLockStatusForWallet();
   }, [refreshLockStatusForWallet]);
   useEffect(() => {
@@ -778,6 +783,61 @@ function App() {
   useEffect(() => {
     activeStepRef.current = activeStep;
   }, [activeStep]);
+  // Kick off a proposal refresh exactly when a pending proposal should start or an active proposal should close,
+  // rather than waiting up to the next 20s refresh tick.
+  const proposalEdgeTriggerRef = useRef<{ start: Set<string>; end: Set<string> }>({
+    start: new Set(),
+    end: new Set(),
+  });
+  const proposalEdgeTimeoutsRef = useRef<{
+    start: Map<string, ReturnType<typeof setTimeout>>;
+    end: Map<string, ReturnType<typeof setTimeout>>;
+  }>({
+    start: new Map(),
+    end: new Map(),
+  });
+  useEffect(() => {
+    return () => {
+      proposalEdgeTimeoutsRef.current.start.forEach((t) => clearTimeout(t));
+      proposalEdgeTimeoutsRef.current.end.forEach((t) => clearTimeout(t));
+      proposalEdgeTimeoutsRef.current.start.clear();
+      proposalEdgeTimeoutsRef.current.end.clear();
+    };
+  }, []);
+  useEffect(() => {
+    if (activeStep !== 'vote') return;
+    if (!proposals || proposals.length === 0) return;
+    const nowSeconds = Math.floor(nowMs / 1000);
+    let shouldRefresh = false;
+    for (const proposal of proposals) {
+      const id = proposal.proposal_id;
+      if (proposal.state === 0 && proposal.start_block <= nowSeconds && !proposalEdgeTriggerRef.current.start.has(id)) {
+        proposalEdgeTriggerRef.current.start.add(id);
+        shouldRefresh = true;
+        if (!proposalEdgeTimeoutsRef.current.start.has(id)) {
+          const t = setTimeout(() => {
+            proposalEdgeTimeoutsRef.current.start.delete(id);
+            void loadProposals();
+          }, 4_000);
+          proposalEdgeTimeoutsRef.current.start.set(id, t);
+        }
+      }
+      if (proposal.state === 1 && proposal.end_block <= nowSeconds && !proposalEdgeTriggerRef.current.end.has(id)) {
+        proposalEdgeTriggerRef.current.end.add(id);
+        shouldRefresh = true;
+        if (!proposalEdgeTimeoutsRef.current.end.has(id)) {
+          const t = setTimeout(() => {
+            proposalEdgeTimeoutsRef.current.end.delete(id);
+            void loadProposals();
+          }, 4_000);
+          proposalEdgeTimeoutsRef.current.end.set(id, t);
+        }
+      }
+    }
+    if (shouldRefresh) {
+      void loadProposals();
+    }
+  }, [activeStep, proposals, nowMs, loadProposals]);
   const hasBalanceData = hyprOwned !== null;
   const hasHyprHoldings = (hyprOwned?.amount_raw_wei ? BigInt(hyprOwned.amount_raw_wei) : 0n) > 0n || lockedWei > 0n;
   const lockAllowanceWei = tokeregistryAllowance?.amount_raw_wei
@@ -878,10 +938,6 @@ function App() {
     if (activeStep !== 'vote') return;
     void loadProposals();
   }, [activeStep, loadProposals]);
-  useEffect(() => {
-    if (!proposals || proposals.length === 0) return;
-    void loadVotesForProposals(proposals);
-  }, [proposals, loadVotesForProposals, walletConnected, address]);
   const {
     data: voteTxHash,
     error: voteWriteError,
@@ -904,11 +960,14 @@ function App() {
   }, [voteWriteError, voteSubmittingId]);
 
   useEffect(() => {
-    if (isVoteConfirmed && voteSubmittingId) {
-      setVoteSubmittedId(voteSubmittingId);
-      setVoteSubmittingId(null);
-      setHasVotedMap((prev) => ({ ...prev, [voteSubmittingId]: true }));
-      void loadVotesForProposals(proposals);
+    if (isVoteConfirmed) {
+      const targetId = voteSubmittingId ?? lastVoteProposalIdRef.current;
+      if (targetId) {
+        setVoteSubmittedId(targetId);
+        setVoteSubmittingId(null);
+        setHasVotedMap((prev) => ({ ...prev, [targetId]: true }));
+        void loadVotesForProposals(proposals);
+      }
     }
   }, [isVoteConfirmed, voteSubmittingId, loadVotesForProposals, proposals]);
 
@@ -917,6 +976,7 @@ function App() {
       if (!governorAddress) return;
       if (!proposalId) return;
       resetVoteWrite();
+      lastVoteProposalIdRef.current = proposalId;
       setVoteError(null);
       setVoteErrorProposalId(null);
       setVoteSubmittedId(null);
@@ -1265,22 +1325,24 @@ function App() {
             <section className="step-panel">
               <div className="lock-card">
                 <span className="lock-card-label">Voting</span>
-                {isLoadingProposals && <span className="lock-card-sub">Loading proposals…</span>}
                 {proposalError && <span className="lock-card-sub">{proposalError}</span>}
-                {!isLoadingProposals && !proposalError && (proposals?.length ?? 0) === 0 && (
+                {!proposalError && (proposals?.length ?? 0) === 0 && (
                   <span className="lock-card-sub">No proposals found.</span>
                 )}
               </div>
               {proposals?.map((proposal) => {
                 const proposalId = proposal.proposal_id;
                 const votesForProposal = votesByProposal[proposalId] ?? [];
-                const votesLoadingForProposal = votesLoading[proposalId];
                 const votesErrorForProposal = votesError[proposalId];
                 const hasVoted = hasVotedMap[proposalId];
                 const quorum = quorumByProposal[proposalId];
                 const quorumErr = quorumError[proposalId];
                 const votingPower = votingPowerMap[proposalId];
                 const votingPowerErr = votingPowerError[proposalId];
+                const quorumPercentDisplay =
+                  quorum && Number.isFinite(quorum.percent)
+                    ? Math.max(0, Math.min(999.9, quorum.percent))
+                    : null;
                 const total = votesForProposal.reduce(
                   (acc, vote) => {
                     const weight = BigInt(vote.weight ?? '0');
@@ -1393,13 +1455,12 @@ function App() {
                       {' · '}
                       <span className="vote-summary">Abstain {pct(total.abstain)}</span>
                     </div>
-                    {votesLoadingForProposal && <span className="lock-card-sub">Loading votes…</span>}
                     {votesErrorForProposal && <span className="lock-card-sub">{votesErrorForProposal}</span>}
-                    {quorum && (
+                    {quorumPercentDisplay !== null && (
                       <span className="lock-card-sub">
-                        {quorum.percent >= 100
+                        {quorumPercentDisplay >= 100
                           ? 'Quorum (For + Abstain): achieved'
-                          : `Quorum (For + Abstain): ${quorum.percent.toFixed(1)}%`}
+                          : `Quorum (For + Abstain): ${quorumPercentDisplay.toFixed(1)}%`}
                       </span>
                     )}
                     {quorumErr && <span className="lock-card-sub">{quorumErr}</span>}
@@ -1460,7 +1521,7 @@ function App() {
                     {hasVoted && votesForProposal.length === 0 && (
                       <span className="lock-card-sub">You voted on this proposal.</span>
                     )}
-                    {voteSubmittedId === proposalId && (
+                    {voteSubmittedId === proposalId && proposal.state === 1 && (
                       <span className="lock-card-sub">Vote submitted successfully.</span>
                     )}
                     {voteErrorProposalId === proposalId && voteError && (
