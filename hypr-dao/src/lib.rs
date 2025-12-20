@@ -25,21 +25,6 @@ const LOCAL_TOKEN_REGISTRY: &str = "0x0000000000e8d224B902632757d5dbc51a451456";
 const LOCAL_TOKEN_REGISTRY: &str = "0x326Aa6822847B97a8387445a497e01253aC6E82B";
 
 #[cfg(not(feature = "simulation-mode"))]
-const LOCAL_TIMELOCK: &str = "0xb7Dcc6Ce8efFD80Fc26f0FD1A5C226C3c53f6D8F";
-#[cfg(feature = "simulation-mode")]
-const LOCAL_TIMELOCK: &str = "0xb7Dcc6Ce8efFD80Fc26f0FD1A5C226C3c53f6D8F";
-
-#[cfg(not(feature = "simulation-mode"))]
-const LOCAL_GOVERNOR: &str = "0x45d8B75bb9A961E88486C470bcf8aa13E506Ec9B";
-#[cfg(feature = "simulation-mode")]
-const LOCAL_GOVERNOR: &str = "0x45d8B75bb9A961E88486C470bcf8aa13E506Ec9B";
-
-#[cfg(not(feature = "simulation-mode"))]
-const LOCAL_VOTES_TOKEN: &str = "0xec48905Bb1714bbf3B6f56E49a8FA2299Bfa55f5";
-#[cfg(feature = "simulation-mode")]
-const LOCAL_VOTES_TOKEN: &str = "0xec48905Bb1714bbf3B6f56E49a8FA2299Bfa55f5";
-
-#[cfg(not(feature = "simulation-mode"))]
 const MIN_LOCK_DURATION_SECONDS: u64 = 4 * 7 * 24 * 60 * 60;
 #[cfg(feature = "simulation-mode")]
 const MIN_LOCK_DURATION_SECONDS: u64 = 4 * 60;
@@ -125,6 +110,9 @@ sol! {
     contract GovernorHasVoted {
         function hasVoted(uint256 proposalId, address account) external view returns (bool);
     }
+
+    #[allow(non_camel_case_types)]
+    event ProposalQueued(uint256 proposalId, uint256 eta);
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -266,24 +254,27 @@ impl HyprDaoState {
         let mut execute_after: u64 = 0;
         let mut min_delay_seconds: u64 = 0;
         let mut executed_at: u64 = 0;
-        if let Ok(delay) = dao.timelock_delay() {
-            min_delay_seconds = u256_to_u64(&delay);
-        }
-        if let Ok(eta) = dao.proposal_eta(parsed_id) {
-            let eta_u64 = u256_to_u64(&eta);
-            execute_after = eta_u64;
-            queued_at = eta_u64.saturating_sub(min_delay_seconds);
-        }
-        if state == 5 && (execute_after == 0 || execute_after <= queued_at) {
-            if let Ok(delay) = dao.timelock_delay() {
-                min_delay_seconds = u256_to_u64(&delay);
+
+        if let Ok(queued_events) =
+            fetch_proposals_queued(&dao, BlockNumberOrTag::Earliest, None)
+        {
+            if let Some(event) = queued_events.into_iter().find(|e| e.proposal_id == parsed_id) {
+                execute_after = u256_to_u64(&event.eta);
+                if let Ok(ts) = dao.block_timestamp(event.block_number) {
+                    queued_at = ts;
+                    if execute_after > 0 && execute_after >= queued_at {
+                        min_delay_seconds = execute_after.saturating_sub(queued_at);
+                    }
+                }
             }
+        }
+
+        if execute_after == 0 {
             if let Ok(eta) = dao.proposal_eta(parsed_id) {
-                let eta_u64 = u256_to_u64(&eta);
-                execute_after = eta_u64;
-                queued_at = eta_u64.saturating_sub(min_delay_seconds);
+                execute_after = u256_to_u64(&eta);
             }
         }
+
         if executed_at == 0 {
           if let Ok(executed) = dao.fetch_proposals_executed(Some(BlockNumberOrTag::Earliest), None) {
             if let Some(found) = executed.into_iter().find(|e| e.proposal_id == parsed_id) {
@@ -366,6 +357,8 @@ impl HyprDaoState {
         let events = dao
             .fetch_proposals_created(Some(BlockNumberOrTag::Earliest), None)
             .map_err(|err| format!("unable to fetch proposals: {err:?}"))?;
+        let queued_events = fetch_proposals_queued(&dao, BlockNumberOrTag::Earliest, None)
+            .unwrap_or_default();
         let mut proposals = Vec::new();
         for event in events {
             let state = dao.proposal_state(event.proposal_id).unwrap_or(u8::MAX);
@@ -373,22 +366,23 @@ impl HyprDaoState {
             let mut execute_after: u64 = 0;
             let mut min_delay_seconds: u64 = 0;
             let mut executed_at: u64 = 0;
-            if let Ok(delay) = dao.timelock_delay() {
-                min_delay_seconds = u256_to_u64(&delay);
-            }
-            if let Ok(eta) = dao.proposal_eta(event.proposal_id) {
-                let eta_u64 = u256_to_u64(&eta);
-                execute_after = eta_u64;
-                queued_at = eta_u64.saturating_sub(min_delay_seconds);
-            }
-            if state == 5 && (execute_after == 0 || execute_after <= queued_at) {
-                if let Ok(delay) = dao.timelock_delay() {
-                    min_delay_seconds = u256_to_u64(&delay);
+
+            if let Some(queued) = queued_events
+                .iter()
+                .find(|qe| qe.proposal_id == event.proposal_id)
+            {
+                execute_after = u256_to_u64(&queued.eta);
+                if let Ok(ts) = dao.block_timestamp(queued.block_number) {
+                    queued_at = ts;
+                    if execute_after > 0 && execute_after >= queued_at {
+                        min_delay_seconds = execute_after.saturating_sub(queued_at);
+                    }
                 }
+            }
+
+            if execute_after == 0 {
                 if let Ok(eta) = dao.proposal_eta(event.proposal_id) {
-                    let eta_u64 = u256_to_u64(&eta);
-                    execute_after = eta_u64;
-                    queued_at = eta_u64.saturating_sub(min_delay_seconds);
+                    execute_after = u256_to_u64(&eta);
                 }
             }
             if executed_at == 0 {
@@ -566,13 +560,13 @@ impl HyprDaoState {
 
     fn dao_client() -> Result<DaoContracts, String> {
         let provider = Provider::new(LOCAL_CHAIN_ID, 30);
-        let timelock = EthAddress::from_str(LOCAL_TIMELOCK)
-            .map_err(|_| "invalid timelock address".to_string())?;
-        let governor = EthAddress::from_str(LOCAL_GOVERNOR)
-            .map_err(|_| "invalid governor address".to_string())?;
-        let votes_token = EthAddress::from_str(LOCAL_VOTES_TOKEN)
-            .map_err(|_| "invalid votes token address".to_string())?;
-        Ok(DaoContracts::new(provider, timelock, governor, votes_token))
+        // DaoContracts consumes built-in constants; inputs are ignored.
+        Ok(DaoContracts::new(
+            provider,
+            EthAddress::ZERO,
+            EthAddress::ZERO,
+            EthAddress::ZERO,
+        ))
     }
 }
 
@@ -602,6 +596,43 @@ fn fetch_votes(dao: &DaoContracts, proposal_id: U256) -> Result<Vec<VoteView>, S
         }
     }
     Ok(out)
+}
+
+struct ProposalQueuedEvent {
+    proposal_id: U256,
+    eta: U256,
+    block_number: u64,
+}
+
+fn fetch_proposals_queued(
+    dao: &DaoContracts,
+    from_block: BlockNumberOrTag,
+    to_block: Option<BlockNumberOrTag>,
+) -> Result<Vec<ProposalQueuedEvent>, String> {
+    let mut filter = EthFilter::new()
+        .address(dao.governor)
+        .event_signature(B256::from(ProposalQueued::SIGNATURE_HASH))
+        .from_block(from_block);
+    if let Some(to) = to_block {
+        filter = filter.to_block(to);
+    }
+    let logs = dao
+        .provider
+        .get_logs(&filter)
+        .map_err(|err| format!("unable to fetch proposal queue logs: {err:?}"))?;
+    let mut out_events = Vec::new();
+    for log in logs {
+        let prim_log = log.inner.clone();
+        if let Ok(decoded) = ProposalQueued::decode_log(&prim_log, true) {
+            let block_number = log.block_number.unwrap_or_default();
+            out_events.push(ProposalQueuedEvent {
+                proposal_id: decoded.proposalId,
+                eta: decoded.eta,
+                block_number,
+            });
+        }
+    }
+    Ok(out_events)
 }
 
 fn check_has_voted(
