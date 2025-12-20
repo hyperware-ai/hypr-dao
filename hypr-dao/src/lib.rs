@@ -20,11 +20,6 @@ const LOCAL_CHAIN_ID: u64 = 8453;
 const LOCAL_CHAIN_ID: u64 = 31337;
 
 #[cfg(not(feature = "simulation-mode"))]
-const LOCAL_TOKEN_REGISTRY: &str = "0x0000000000e8d224B902632757d5dbc51a451456";
-#[cfg(feature = "simulation-mode")]
-const LOCAL_TOKEN_REGISTRY: &str = "0x326Aa6822847B97a8387445a497e01253aC6E82B";
-
-#[cfg(not(feature = "simulation-mode"))]
 const MIN_LOCK_DURATION_SECONDS: u64 = 4 * 7 * 24 * 60 * 60;
 #[cfg(feature = "simulation-mode")]
 const MIN_LOCK_DURATION_SECONDS: u64 = 4 * 60;
@@ -552,21 +547,13 @@ impl HyprDaoState {
     }
 
     fn bindings_client() -> Result<Bindings, String> {
-        let provider = Provider::new(LOCAL_CHAIN_ID, 30);
-        let address = EthAddress::from_str(LOCAL_TOKEN_REGISTRY)
-            .map_err(|_| "invalid proxy address".to_string())?;
-        Ok(Bindings::new(provider, address))
+        println!("Using bindings default helper (address/chain from process_lib)");
+        Ok(Bindings::default(30))
     }
 
     fn dao_client() -> Result<DaoContracts, String> {
         let provider = Provider::new(LOCAL_CHAIN_ID, 30);
-        // DaoContracts consumes built-in constants; inputs are ignored.
-        Ok(DaoContracts::new(
-            provider,
-            EthAddress::ZERO,
-            EthAddress::ZERO,
-            EthAddress::ZERO,
-        ))
+        Ok(DaoContracts::new(provider))
     }
 }
 

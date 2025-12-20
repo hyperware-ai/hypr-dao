@@ -9,7 +9,10 @@ serde_json = "1.0"
 wit-bindgen = "0.42.1"
 
 [dependencies.hyperware_process_lib]
-features = ["hyperapp"]
+features = [
+    "hyperapp",
+    "simulation-mode",
+]
 version = "3.0.0"
 
 [dependencies.hypr_dao_caller_utils]
