@@ -18,6 +18,10 @@ const ICON: &str = include_str!("./icon");
 const LOCAL_CHAIN_ID: u64 = 8453;
 #[cfg(feature = "simulation-mode")]
 const LOCAL_CHAIN_ID: u64 = 31337;
+#[cfg(not(feature = "simulation-mode"))]
+const LOCAL_TOKEN_REGISTRY: &str = "0x0000000000e8d224B902632757d5dbc51a451456";
+#[cfg(feature = "simulation-mode")]
+const LOCAL_TOKEN_REGISTRY: &str = "0x326Aa6822847B97a8387445a497e01253aC6E82B";
 
 #[cfg(not(feature = "simulation-mode"))]
 const MIN_LOCK_DURATION_SECONDS: u64 = 4 * 7 * 24 * 60 * 60;
@@ -217,9 +221,18 @@ impl HyprDaoState {
         let parsed = EthAddress::from_str(&address)
             .map_err(|_| "invalid owner address provided".to_string())?;
         self.owner_address = Some(format_address(parsed));
+        println!(
+            "refresh_lock_status_for: starting for {} on chain {}",
+            self.owner_address.as_deref().unwrap_or_default(),
+            LOCAL_CHAIN_ID
+        );
         match self.refresh_lock_state(Some(parsed)) {
             Ok(_) => Ok(self.current_status()),
             Err(err) => {
+                println!(
+                    "refresh_lock_status_for: error on chain {} -> {}",
+                    LOCAL_CHAIN_ID, err
+                );
                 self.last_error = Some(err.clone());
                 Err(err)
             }
@@ -317,14 +330,27 @@ impl HyprDaoState {
                 required: "0".to_string(),
             });
         }
+        // If the proposal is Canceled, skip quorum to avoid revert and provider poisoning.
+        if state == 2 {
+            println!(
+                "quorum_progress: proposal {} canceled on chain {}, returning 0",
+                proposal_id, LOCAL_CHAIN_ID
+            );
+            return Ok(QuorumProgress {
+                percent: 0.0,
+                bps: 0,
+                counted: "0".to_string(),
+                required: "0".to_string(),
+            });
+        }
         let (bps, counted, required) = match dao.quorum_progress_bps(parsed_id) {
             Ok(res) => res,
             Err(e) => {
                 // If RPC for quorum cannot be reached, return a safe default instead of bubbling error.
-                if e.contains("NoRpcForChain") {
+                if e.contains("NoRpcForChain") || e.contains("execution reverted") {
                     println!(
-                        "quorum_progress: NoRpcForChain for proposal {}, chain {}, returning 0",
-                        proposal_id, LOCAL_CHAIN_ID
+                        "quorum_progress: treat error '{}' for proposal {}, chain {} as 0 quorum",
+                        e, proposal_id, LOCAL_CHAIN_ID
                     );
                     (0, U256::ZERO, U256::ZERO)
                 } else {
@@ -547,8 +573,14 @@ impl HyprDaoState {
     }
 
     fn bindings_client() -> Result<Bindings, String> {
-        println!("Using bindings default helper (address/chain from process_lib)");
-        Ok(Bindings::default(30))
+        let provider = Provider::new(LOCAL_CHAIN_ID, 30);
+        let address = EthAddress::from_str(LOCAL_TOKEN_REGISTRY)
+            .map_err(|_| "invalid proxy address".to_string())?;
+        println!(
+            "Using bindings contract at {} on chain {}",
+            LOCAL_TOKEN_REGISTRY, LOCAL_CHAIN_ID
+        );
+        Ok(Bindings::new(provider, address))
     }
 
     fn dao_client() -> Result<DaoContracts, String> {
