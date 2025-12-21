@@ -539,6 +539,7 @@ function App() {
   const [desiredBindView, setDesiredBindView] = useState<BindView | null>(null);
   const activeStepRef = useRef<StepId>('approve');
   const [proposals, setProposals] = useState<ProposalSummary[] | null>(null);
+  const [proposalSort, setProposalSort] = useState<'start-desc' | 'start-asc' | 'name-asc' | 'name-desc'>('start-desc');
   const [_isLoadingProposals, setIsLoadingProposals] = useState(false);
   const [proposalError, setProposalError] = useState<string | null>(null);
   const [votesByProposal, setVotesByProposal] = useState<Record<string, VoteView[]>>({});
@@ -672,6 +673,24 @@ function App() {
     walletConnected && chain?.id !== undefined && chain.id !== expectedChainId;
   const environmentReady = !networkMismatch;
   const connectComplete = Boolean(walletConnected && environmentReady);
+  const sortedProposals = useMemo(() => {
+    if (!proposals) return [];
+    const items = [...proposals];
+    const byStartAsc = (a: ProposalSummary, b: ProposalSummary) => a.start_block - b.start_block;
+    const byNameAsc = (a: ProposalSummary, b: ProposalSummary) =>
+      (a.description || '').localeCompare(b.description || '');
+    switch (proposalSort) {
+      case 'start-asc':
+        return items.sort(byStartAsc);
+      case 'name-asc':
+        return items.sort(byNameAsc);
+      case 'name-desc':
+        return items.sort((a, b) => byNameAsc(b, a));
+      case 'start-desc':
+      default:
+        return items.sort((a, b) => byStartAsc(b, a));
+    }
+  }, [proposals, proposalSort]);
   const loadVotesForProposals = useCallback(
     async (list: ProposalSummary[] | null | undefined) => {
       if (!list || list.length === 0) return;
@@ -722,6 +741,12 @@ function App() {
     try {
       const result = await fetchProposals();
       setProposals(result);
+      if (voteSubmittedId) {
+        const match = result.find((p) => p.proposal_id === voteSubmittedId);
+        if (!match || match.state !== 1) {
+          setVoteSubmittedId(null);
+        }
+      }
       await loadVotesForProposals(result);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to load proposals';
@@ -730,7 +755,7 @@ function App() {
     } finally {
       setIsLoadingProposals(false);
     }
-  }, [loadVotesForProposals]);
+  }, [loadVotesForProposals, voteSubmittedId]);
 
   const fetchLockStatusForWallet = useCallback(async () => {
     if (walletConnected && address) {
@@ -808,12 +833,10 @@ function App() {
     if (activeStep !== 'vote') return;
     if (!proposals || proposals.length === 0) return;
     const nowSeconds = Math.floor(nowMs / 1000);
-    let shouldRefresh = false;
     for (const proposal of proposals) {
       const id = proposal.proposal_id;
       if (proposal.state === 0 && proposal.start_block <= nowSeconds && !proposalEdgeTriggerRef.current.start.has(id)) {
         proposalEdgeTriggerRef.current.start.add(id);
-        shouldRefresh = true;
         if (!proposalEdgeTimeoutsRef.current.start.has(id)) {
           const t = setTimeout(() => {
             proposalEdgeTimeoutsRef.current.start.delete(id);
@@ -824,7 +847,6 @@ function App() {
       }
       if (proposal.state === 1 && proposal.end_block <= nowSeconds && !proposalEdgeTriggerRef.current.end.has(id)) {
         proposalEdgeTriggerRef.current.end.add(id);
-        shouldRefresh = true;
         if (!proposalEdgeTimeoutsRef.current.end.has(id)) {
           const t = setTimeout(() => {
             proposalEdgeTimeoutsRef.current.end.delete(id);
@@ -833,9 +855,6 @@ function App() {
           proposalEdgeTimeoutsRef.current.end.set(id, t);
         }
       }
-    }
-    if (shouldRefresh) {
-      void loadProposals();
     }
   }, [activeStep, proposals, nowMs, loadProposals]);
   const hasBalanceData = hyprOwned !== null;
@@ -1324,18 +1343,45 @@ function App() {
           {activeStep === 'vote' && (
             <section className="step-panel">
               <div className="lock-card">
-                <span className="lock-card-label">Voting</span>
+                <div className="bindings-header" style={{ alignItems: 'flex-start', minHeight: '1.75rem' }}>
+                  <span className="lock-card-label">Proposals</span>
+                  {(proposals?.length ?? 0) > 0 && (
+                    <div className="bindings-sort">
+                      <button
+                        type="button"
+                        className={`icon-button${proposalSort.startsWith('name') ? ' active' : ''}`}
+                        title={`Sort proposals ${proposalSort === 'name-asc' ? 'Z→A' : 'A→Z'}`}
+                        onClick={() =>
+                          setProposalSort((prev) => (prev === 'name-asc' ? 'name-desc' : 'name-asc'))
+                        }
+                      >
+                        A↕
+                      </button>
+                      <button
+                        type="button"
+                        className={`icon-button${proposalSort.startsWith('start') ? ' active' : ''}`}
+                        title={`Sort by ${proposalSort === 'start-asc' ? 'latest start' : 'earliest start'}`}
+                        onClick={() =>
+                          setProposalSort((prev) =>
+                            prev === 'start-asc' ? 'start-desc' : 'start-asc',
+                          )
+                        }
+                      >
+                        ⏱↕
+                      </button>
+                    </div>
+                  )}
+                </div>
                 {proposalError && <span className="lock-card-sub">{proposalError}</span>}
                 {!proposalError && (proposals?.length ?? 0) === 0 && (
                   <span className="lock-card-sub">No proposals found.</span>
                 )}
-              </div>
-              {proposals?.map((proposal) => {
-                const proposalId = proposal.proposal_id;
-                const votesForProposal = votesByProposal[proposalId] ?? [];
-                const votesErrorForProposal = votesError[proposalId];
-                const hasVoted = hasVotedMap[proposalId];
-                const quorum = quorumByProposal[proposalId];
+                {sortedProposals.map((proposal, idx) => {
+                  const proposalId = proposal.proposal_id;
+                  const votesForProposal = votesByProposal[proposalId] ?? [];
+                  const votesErrorForProposal = votesError[proposalId];
+                  const hasVoted = hasVotedMap[proposalId];
+                  const quorum = quorumByProposal[proposalId];
                 const quorumErr = quorumError[proposalId];
                 const votingPower = votingPowerMap[proposalId];
                 const votingPowerErr = votingPowerError[proposalId];
@@ -1431,61 +1477,76 @@ function App() {
                   !isVoteConfirming;
                 const isSubmitting = voteSubmittingId === proposalId && (isVotePending || isVoteConfirming);
                 return (
-                  <div className="lock-card" key={proposalId}>
-                    <span className="lock-card-label" style={{ wordBreak: 'break-word' }}>
-                      Proposal {proposalId}
-                    </span>
-                    <span className="lock-card-value">
+                  <div
+                    key={proposalId}
+                    style={{
+                      marginTop: idx === 0 ? '0.5rem' : '0.75rem',
+                      paddingTop: idx === 0 ? '0.25rem' : '0.5rem',
+                      borderTop: idx === 0 ? undefined : '1px solid #e5e5e5',
+                    }}
+                  >
+                    <span className="lock-card-value" style={{ display: 'block' }}>
                       {proposal.description || 'No description provided'}
                     </span>
-                    <span className="lock-card-sub">State: {proposalStateLabel(proposal.state)}</span>
-                    {timingLines.map((line, idx) => (
-                      <span className="lock-card-sub" key={idx}>
+                    <span className="lock-card-sub" style={{ display: 'block' }}>
+                      Status:{' '}
+                      <span style={{ fontWeight: 700 }}>
+                        {proposal.state === 3 && total.for > total.against
+                          ? 'Defeated (did not meet quorum)'
+                          : proposalStateLabel(proposal.state)}
+                      </span>
+                    </span>
+                    {timingLines.map((line, idx2) => (
+                      <span className="lock-card-sub" key={idx2} style={{ display: 'block' }}>
                         {line}
                       </span>
                     ))}
                     <div className="lock-card-sub" style={{ marginTop: '0.25rem' }}>
-                      <span className="vote-summary" style={{ fontWeight: highlightAgainst ? 700 : 400 }}>
-                        Against {pct(total.against)}
-                      </span>
-                      {' · '}
                       <span className="vote-summary" style={{ fontWeight: highlightFor ? 700 : 400 }}>
                         For {pct(total.for)}
                       </span>
                       {' · '}
+                      <span className="vote-summary" style={{ fontWeight: highlightAgainst ? 700 : 400 }}>
+                        Against {pct(total.against)}
+                      </span>
+                      {' · '}
                       <span className="vote-summary">Abstain {pct(total.abstain)}</span>
                     </div>
-                    {votesErrorForProposal && <span className="lock-card-sub">{votesErrorForProposal}</span>}
+                    {votesErrorForProposal && (
+                      <span className="lock-card-sub" style={{ display: 'block' }}>
+                        {votesErrorForProposal}
+                      </span>
+                    )}
                     {quorumPercentDisplay !== null && (
-                      <span className="lock-card-sub">
+                      <span className="lock-card-sub" style={{ display: 'block' }}>
                         {quorumPercentDisplay >= 100
                           ? 'Quorum (For + Abstain): achieved'
                           : `Quorum (For + Abstain): ${quorumPercentDisplay.toFixed(1)}%`}
                       </span>
                     )}
-                    {quorumErr && <span className="lock-card-sub">{quorumErr}</span>}
-                    {votingPowerErr && <span className="lock-card-sub">{votingPowerErr}</span>}
+                    {quorumErr && (
+                      <span className="lock-card-sub" style={{ display: 'block' }}>
+                        {quorumErr}
+                      </span>
+                    )}
+                    {votingPowerErr && (
+                      <span className="lock-card-sub" style={{ display: 'block' }}>
+                        {votingPowerErr}
+                      </span>
+                    )}
                     {proposal.state === 0 && walletConnected && lockedWei === 0n && (
-                      <span className="lock-card-sub">
-                        You must have HYPR locked at {formatDateTimeAmPmNoSeconds(proposal.start_block * 1000)} to vote on
-                        this proposal.
+                      <span className="lock-card-sub" style={{ display: 'block' }}>
+                        You must have HYPR locked at {formatDateTimeAmPmNoSeconds(proposal.start_block * 1000)} to vote
+                        on this proposal.
                       </span>
                     )}
                     {proposal.state === 1 && votingPower && !votingPower.has_power && (
-                      <span className="lock-card-sub">
+                      <span className="lock-card-sub" style={{ display: 'block' }}>
                         You had no locked HYPR at the start of the voting to allow you to participate.
                       </span>
                     )}
                     {canVote && (
                       <div className="vote-controls">
-                        <button
-                          type="button"
-                          className="pill-button inline-pill"
-                          disabled={isSubmitting}
-                          onClick={() => handleVote(proposalId, 0)}
-                        >
-                          {isSubmitting && voteSubmittingId === proposalId ? 'Submitting…' : 'Against'}
-                        </button>
                         <button
                           type="button"
                           className="pill-button inline-pill"
@@ -1498,6 +1559,14 @@ function App() {
                           type="button"
                           className="pill-button inline-pill"
                           disabled={isSubmitting}
+                          onClick={() => handleVote(proposalId, 0)}
+                        >
+                          {isSubmitting && voteSubmittingId === proposalId ? 'Submitting…' : 'Against'}
+                        </button>
+                        <button
+                          type="button"
+                          className="pill-button inline-pill"
+                          disabled={isSubmitting}
                           onClick={() => handleVote(proposalId, 2)}
                         >
                           {isSubmitting && voteSubmittingId === proposalId ? 'Submitting…' : 'Abstain'}
@@ -1505,7 +1574,7 @@ function App() {
                       </div>
                     )}
                     {hasVoted && votesForProposal.length > 0 && (
-                      <span className="lock-card-sub">
+                      <span className="lock-card-sub" style={{ display: 'block' }}>
                         You voted{' '}
                         {(() => {
                           const mine = votesForProposal.find(
@@ -1519,17 +1588,59 @@ function App() {
                       </span>
                     )}
                     {hasVoted && votesForProposal.length === 0 && (
-                      <span className="lock-card-sub">You voted on this proposal.</span>
+                      <span className="lock-card-sub" style={{ display: 'block' }}>
+                        You voted on this proposal.
+                      </span>
                     )}
                     {voteSubmittedId === proposalId && proposal.state === 1 && (
-                      <span className="lock-card-sub">Vote submitted successfully.</span>
+                      <span className="lock-card-sub" style={{ display: 'block' }}>
+                        Vote submitted successfully.
+                      </span>
                     )}
                     {voteErrorProposalId === proposalId && voteError && (
-                      <span className="lock-card-sub">{voteError}</span>
+                      <span className="lock-card-sub" style={{ display: 'block' }}>
+                        {voteError}
+                      </span>
                     )}
+                    <span
+                      className="lock-card-sub"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        fontSize: '0.78em',
+                        marginTop: '0.5rem',
+                        gap: '0.4rem',
+                      }}
+                    >
+                      <span>Proposal ID:</span>
+                      <span style={{ fontWeight: 600 }}>
+                        {proposalId.length > 14
+                          ? `${proposalId.slice(0, 7)}…${proposalId.slice(-7)}`
+                          : proposalId}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="Copy proposal ID"
+                        onClick={() => {
+                          void navigator.clipboard?.writeText(proposalId);
+                        }}
+                        style={{
+                          border: 'none',
+                          background: 'none',
+                          cursor: 'pointer',
+                          padding: 0,
+                          lineHeight: 1,
+                          fontSize: '1em',
+                        }}
+                        title="Copy proposal ID"
+                      >
+                        ⧉
+                      </button>
+                    </span>
                   </div>
                 );
               })}
+              </div>
             </section>
           )}
                     </>
