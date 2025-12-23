@@ -19,7 +19,8 @@ import { fetchQuorumProgress } from './api/quorum';
 import { fetchVotingPower } from './api/voting_power';
 import { HyprDao as CallerApp } from '#caller-utils';
 
-const simulationMode = import.meta.env.VITE_SIMULATION_MODE === 'true';
+const simulationMode =
+  import.meta.env.VITE_SIMULATION_MODE === 'true' || import.meta.env.MODE === 'development';
 
 type StepId = 'approve' | 'lock' | 'bind' | 'vote';
 type StepIcon = 'check' | 'lock' | 'chain' | 'vote';
@@ -69,7 +70,7 @@ const TOKEN_REGISTRY_ADDRESSES: Record<number, `0x${string}`> = {
   [anvil.id]: '0x326Aa6822847B97a8387445a497e01253aC6E82B',
 };
 const GOVERNOR_ADDRESSES: Record<number, `0x${string}`> = {
-  [base.id]: '0x45d8B75bb9A961E88486C470bcf8aa13E506Ec9B',
+  [base.id]: '0x000000000048395579c3C60f2F8Cb2DECa457550',
   [anvil.id]: '0x45d8B75bb9A961E88486C470bcf8aa13E506Ec9B',
 };
 
@@ -775,13 +776,15 @@ function App() {
         if (refreshAckTimeoutRef.current) {
           clearTimeout(refreshAckTimeoutRef.current);
         }
+        const ackDuration =
+          activeStepRef.current === 'vote' && !simulationMode ? 30_000 : 1200;
         refreshAckTimeoutRef.current = setTimeout(() => {
           setRefreshAck(false);
           refreshAckTimeoutRef.current = null;
-        }, 1200);
+        }, ackDuration);
       }
     }
-  }, [walletConnected, address, refreshLockStatusRaw, loadProposals]);
+  }, [walletConnected, address, refreshLockStatusRaw, loadProposals, simulationMode]);
 
   const handleManualRefresh = useCallback(async () => {
     refreshAckTriggerRef.current = true;
@@ -949,9 +952,9 @@ function App() {
       if (connectComplete && environmentReady) {
         void refreshLockStatusForWallet();
       }
-    }, 20_000);
+    }, simulationMode ? 20_000 : 30 * 60 * 1000);
     return () => clearInterval(id);
-  }, [connectComplete, environmentReady, refreshLockStatusForWallet]);
+  }, [connectComplete, environmentReady, refreshLockStatusForWallet, simulationMode]);
 
   useEffect(() => {
     if (activeStep !== 'vote') return;

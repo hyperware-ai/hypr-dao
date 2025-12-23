@@ -5,7 +5,7 @@ use alloy_sol_types::SolCall;
 use alloy_sol_types::SolEvent;
 use hyperware_process_lib::{
     bindings::{Bindings, LockDetails as OnchainLockDetails, RegistrationDetails},
-    dao::DaoContracts,
+    dao::{DaoContracts, DAO_FIRST_BLOCK},
     eth::{BlockNumberOrTag, Filter as EthFilter, Provider},
     homepage::add_to_homepage,
     our, println, Message, Request,
@@ -22,6 +22,22 @@ const LOCAL_CHAIN_ID: u64 = 31337;
 const LOCAL_TOKEN_REGISTRY: &str = "0x0000000000e8d224B902632757d5dbc51a451456";
 #[cfg(feature = "simulation-mode")]
 const LOCAL_TOKEN_REGISTRY: &str = "0x326Aa6822847B97a8387445a497e01253aC6E82B";
+#[cfg(not(feature = "simulation-mode"))]
+const LOCAL_GOVERNOR: &str = "0x000000000048395579c3C60f2F8Cb2DECa457550";
+#[cfg(feature = "simulation-mode")]
+const LOCAL_GOVERNOR: &str = "0x45d8B75bb9A961E88486C470bcf8aa13E506Ec9B";
+#[cfg(not(feature = "simulation-mode"))]
+const LOCAL_TIMELOCK: &str = "0x0000000000c3442cbc1E194BBD6f74713816e51B";
+#[cfg(feature = "simulation-mode")]
+const LOCAL_TIMELOCK: &str = "0x322D23640D57f36aE058FCc43e02C2A307678166";
+#[cfg(not(feature = "simulation-mode"))]
+const LOCAL_VOTES_TOKEN: &str = "0x00000000004a50Daa1B759C47Ebf4239163aE5be";
+#[cfg(feature = "simulation-mode")]
+const LOCAL_VOTES_TOKEN: &str = "0xec48905Bb1714bbf3B6f56E49a8FA2299Bfa55f5";
+#[cfg(not(feature = "simulation-mode"))]
+const LOCAL_DAO_FIRST_BLOCK: u64 = 39_827_295;
+#[cfg(feature = "simulation-mode")]
+const LOCAL_DAO_FIRST_BLOCK: u64 = 0;
 
 #[cfg(not(feature = "simulation-mode"))]
 const MIN_LOCK_DURATION_SECONDS: u64 = 4 * 7 * 24 * 60 * 60;
@@ -253,7 +269,7 @@ impl HyprDaoState {
             .proposal_deadline(parsed_id)
             .map_err(|err| format!("unable to fetch proposal deadline: {err:?}"))?;
         let mut description = String::new();
-        if let Ok(events) = dao.fetch_proposals_created(Some(BlockNumberOrTag::Earliest), None) {
+        if let Ok(events) = dao.fetch_proposals_created(Some(BlockNumberOrTag::from(LOCAL_DAO_FIRST_BLOCK)), None) {
             if let Some(found) = events.into_iter().find(|e| e.proposal_id == parsed_id) {
                 description = found.description;
             }
@@ -264,7 +280,7 @@ impl HyprDaoState {
         let mut executed_at: u64 = 0;
 
         if let Ok(queued_events) =
-            fetch_proposals_queued(&dao, BlockNumberOrTag::Earliest, None)
+            fetch_proposals_queued(&dao, BlockNumberOrTag::from(LOCAL_DAO_FIRST_BLOCK), None)
         {
             if let Some(event) = queued_events.into_iter().find(|e| e.proposal_id == parsed_id) {
                 execute_after = u256_to_u64(&event.eta);
@@ -284,7 +300,7 @@ impl HyprDaoState {
         }
 
         if executed_at == 0 {
-          if let Ok(executed) = dao.fetch_proposals_executed(Some(BlockNumberOrTag::Earliest), None) {
+          if let Ok(executed) = dao.fetch_proposals_executed(Some(BlockNumberOrTag::from(LOCAL_DAO_FIRST_BLOCK)), None) {
             if let Some(found) = executed.into_iter().find(|e| e.proposal_id == parsed_id) {
               if let Ok(ts) = dao.block_timestamp(found.block_number) {
                 executed_at = ts;
@@ -375,11 +391,19 @@ impl HyprDaoState {
     #[http]
     async fn list_proposals(&self) -> Result<Vec<ProposalView>, String> {
         let dao = Self::dao_client()?;
+        println!(
+            "list_proposals: chain {} governor {} from block {}",
+            LOCAL_CHAIN_ID,
+            format!("{:#x}", dao.governor),
+            LOCAL_DAO_FIRST_BLOCK
+        );
         let events = dao
-            .fetch_proposals_created(Some(BlockNumberOrTag::Earliest), None)
+            .fetch_proposals_created(Some(BlockNumberOrTag::from(LOCAL_DAO_FIRST_BLOCK)), None)
             .map_err(|err| format!("unable to fetch proposals: {err:?}"))?;
-        let queued_events = fetch_proposals_queued(&dao, BlockNumberOrTag::Earliest, None)
+        println!("list_proposals: fetched {} ProposalCreated events", events.len());
+        let queued_events = fetch_proposals_queued(&dao, BlockNumberOrTag::from(LOCAL_DAO_FIRST_BLOCK), None)
             .unwrap_or_default();
+        println!("list_proposals: fetched {} ProposalQueued events", queued_events.len());
         let mut proposals = Vec::new();
         for event in events {
             let state = dao.proposal_state(event.proposal_id).unwrap_or(u8::MAX);
@@ -407,7 +431,7 @@ impl HyprDaoState {
                 }
             }
             if executed_at == 0 {
-              if let Ok(executed) = dao.fetch_proposals_executed(Some(BlockNumberOrTag::Earliest), None) {
+              if let Ok(executed) = dao.fetch_proposals_executed(Some(BlockNumberOrTag::from(LOCAL_DAO_FIRST_BLOCK)), None) {
                 if let Some(found) = executed.into_iter().find(|e| e.proposal_id == event.proposal_id) {
                   if let Ok(ts) = dao.block_timestamp(found.block_number) {
                     executed_at = ts;
@@ -428,6 +452,7 @@ impl HyprDaoState {
                 executed_at,
             });
         }
+        println!("list_proposals: returning {} proposals", proposals.len());
         Ok(proposals)
     }
 
@@ -585,7 +610,18 @@ impl HyprDaoState {
 
     fn dao_client() -> Result<DaoContracts, String> {
         let provider = Provider::new(LOCAL_CHAIN_ID, 30);
-        Ok(DaoContracts::new(provider))
+        let timelock =
+            EthAddress::from_str(LOCAL_TIMELOCK).map_err(|_| "invalid timelock address".to_string())?;
+        let governor =
+            EthAddress::from_str(LOCAL_GOVERNOR).map_err(|_| "invalid governor address".to_string())?;
+        let votes_token = EthAddress::from_str(LOCAL_VOTES_TOKEN)
+            .map_err(|_| "invalid votes token address".to_string())?;
+        Ok(DaoContracts {
+            provider,
+            timelock,
+            governor,
+            votes_token,
+        })
     }
 }
 
@@ -595,7 +631,7 @@ fn fetch_votes(dao: &DaoContracts, proposal_id: U256) -> Result<Vec<VoteView>, S
     let filter = EthFilter::new()
         .address(dao.governor)
         .event_signature(B256::from(topic0))
-        .from_block(BlockNumberOrTag::Earliest);
+        .from_block(BlockNumberOrTag::from(DAO_FIRST_BLOCK));
     let logs = dao
         .provider
         .get_logs(&filter)
