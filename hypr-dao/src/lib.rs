@@ -35,7 +35,7 @@ const LOCAL_VOTES_TOKEN: &str = "0x00000000004a50Daa1B759C47Ebf4239163aE5be";
 #[cfg(feature = "simulation-mode")]
 const LOCAL_VOTES_TOKEN: &str = "0xec48905Bb1714bbf3B6f56E49a8FA2299Bfa55f5";
 #[cfg(not(feature = "simulation-mode"))]
-const LOCAL_DAO_FIRST_BLOCK: u64 = 39_827_295;
+const LOCAL_DAO_FIRST_BLOCK: u64 = 40_000_000;
 #[cfg(feature = "simulation-mode")]
 const LOCAL_DAO_FIRST_BLOCK: u64 = 0;
 

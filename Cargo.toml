@@ -11,4 +11,4 @@ members = [
 resolver = "2"
 
 [patch.crates-io]
-hyperware_process_lib = { git = "https://github.com/hyperware-ai/process_lib", rev = "cd0188523241c50f3879b34396c332afcae57af0" }
+hyperware_process_lib = { git = "https://github.com/hyperware-ai/process_lib", rev = "1db70f23ea4543a2db12686873b7567d3ac7a98c" }
