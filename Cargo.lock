@@ -1775,7 +1775,7 @@ dependencies = [
 [[package]]
 name = "hyperware_process_lib"
 version = "3.0.1"
-source = "git+https://github.com/hyperware-ai/process_lib?rev=1db70f23ea4543a2db12686873b7567d3ac7a98c#1db70f23ea4543a2db12686873b7567d3ac7a98c"
+source = "git+https://github.com/hyperware-ai/process_lib?rev=34b1f1d857f76fb474f7af96f089961445758edb#34b1f1d857f76fb474f7af96f089961445758edb"
 dependencies = [
  "alloy",
  "alloy-primitives",
@@ -1815,6 +1815,7 @@ dependencies = [
  "hyperware_process_lib",
  "hypr_dao_caller_utils",
  "process_macros",
+ "rmp-serde",
  "serde",
  "serde_json",
  "wit-bindgen 0.42.1",

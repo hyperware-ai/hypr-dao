@@ -9,14 +9,16 @@
       "eth:distro:sys",
       "http-server:distro:sys",
       "hns-indexer:hns-indexer:sys",
-      "vfs:distro:sys"
+      "vfs:distro:sys",
+      "dao-cacher:hypermap-cacher:sys"
     ],
     "grant_capabilities": [
       "homepage:homepage:sys",
       "eth:distro:sys",
       "http-server:distro:sys",
       "hns-indexer:hns-indexer:sys",
-      "vfs:distro:sys"
+      "vfs:distro:sys",
+      "dao-cacher:hypermap-cacher:sys"
     ],
     "public": false
   }

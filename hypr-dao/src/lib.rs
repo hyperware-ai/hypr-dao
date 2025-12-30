@@ -5,11 +5,15 @@ use alloy_sol_types::SolCall;
 use alloy_sol_types::SolEvent;
 use hyperware_process_lib::{
     bindings::{Bindings, LockDetails as OnchainLockDetails, RegistrationDetails},
-    dao::{DaoContracts, DAO_FIRST_BLOCK},
+    dao::{DaoContracts, HyperwareGovernor, DAO_FIRST_BLOCK},
     eth::{BlockNumberOrTag, Filter as EthFilter, Provider},
     homepage::add_to_homepage,
-    our, println, Message, Request,
+    wait_for_process_ready,
+    our,
+    println,
+    Address, Message, Request, WaitClassification, get_state, set_state,
 };
+use rmp_serde;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -55,8 +59,20 @@ mod hns_indexer_api {
     });
 }
 
+mod dao_cacher_api {
+    wit_bindgen::generate!({
+        path: "../api/hypermap-cacher:sys-v2.wit",
+        world: "hypermap-cacher-sys-v2",
+        generate_unused_types: true,
+        additional_derives: [serde::Deserialize, serde::Serialize, process_macros::SerdeJsonInto],
+    });
+}
+
 use hns_indexer_api::hyperware::process::hns_indexer::{
     IndexerRequest, IndexerResponse, NamehashToNameRequest,
+};
+use dao_cacher_api::hyperware::process::dao_cacher::{
+    DaoCacherRequest, DaoCacherResponse, DaoGetLogsByRangeOkResponse, DaoGetLogsByRangeRequest,
 };
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 struct LockDetailsView {
@@ -117,6 +133,11 @@ struct VoteView {
     reason: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+struct DaoIndex {
+    last_block: u64,
+}
+
 sol! {
     #[allow(non_camel_case_types)]
     event VoteCast(address indexed voter, uint256 proposalId, uint8 support, uint256 weight, string reason);
@@ -147,8 +168,10 @@ struct LockStatusPayload {
     min_lock_duration_seconds: u64,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Debug, Clone)]
 struct HyprDaoState {
+    #[serde(default)]
+    dao_index: Option<DaoIndex>,
     node_id: String,
     owner_address: Option<String>,
     owner_resolution_attempted: bool,
@@ -166,6 +189,7 @@ struct HyprDaoState {
 impl Default for HyprDaoState {
     fn default() -> Self {
         Self {
+            dao_index: None,
             node_id: String::new(),
             owner_address: None,
             owner_resolution_attempted: false,
@@ -182,6 +206,69 @@ impl Default for HyprDaoState {
     }
 }
 
+impl<'de> Deserialize<'de> for HyprDaoState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize, Default)]
+        #[serde(default)]
+        struct Inner {
+            dao_index: Option<DaoIndex>,
+            node_id: String,
+            owner_address: Option<String>,
+            owner_resolution_attempted: bool,
+            lock_details: Option<LockDetailsView>,
+            hypr_owned: Option<BalanceView>,
+            hypr_approved: Option<BalanceView>,
+            tokeregistry_allowance: Option<BalanceView>,
+            hypr_token_address: Option<String>,
+            available_to_bind: Option<BalanceView>,
+            bindings: Vec<BindDetailsView>,
+            last_error: Option<String>,
+            lock_modal_seen: bool,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wrapper {
+            Full(Inner),
+            DaoOnly(DaoIndex),
+            LegacyString(()),
+        }
+
+        let wrapped: Wrapper = match Wrapper::deserialize(deserializer) {
+            Ok(w) => w,
+            Err(_) => return Ok(HyprDaoState::default()),
+        };
+
+        let inner = match wrapped {
+            Wrapper::Full(v) => v,
+            Wrapper::DaoOnly(idx) => Inner {
+                dao_index: Some(idx),
+                ..Default::default()
+            },
+            Wrapper::LegacyString(_) => Inner::default(),
+        };
+
+        Ok(HyprDaoState {
+            dao_index: inner.dao_index,
+            node_id: inner.node_id,
+            owner_address: inner.owner_address,
+            owner_resolution_attempted: inner.owner_resolution_attempted,
+            lock_details: inner.lock_details,
+            hypr_owned: inner.hypr_owned,
+            hypr_approved: inner.hypr_approved,
+            tokeregistry_allowance: inner.tokeregistry_allowance,
+            hypr_token_address: inner.hypr_token_address,
+            available_to_bind: inner.available_to_bind,
+            bindings: inner.bindings,
+            last_error: inner.last_error,
+            lock_modal_seen: inner.lock_modal_seen,
+        })
+    }
+}
+
 #[hyperapp_macro::hyperapp(
     name = "HYPR DAO",
     ui = Some(hyperware_process_lib::http::server::HttpBindingConfig::default()),
@@ -193,8 +280,235 @@ impl Default for HyprDaoState {
     wit_world = "hypr-dao-ware-dot-hypr-v0"
 )]
 impl HyprDaoState {
+    #[local]
+    fn load_checkpoint(&mut self) -> Result<(), String> {
+        if let Some(bytes) = get_state() {
+            match rmp_serde::from_slice::<DaoIndex>(&bytes) {
+                Ok(idx) => {
+                    println!(
+                        "DAO index: loaded checkpoint start block {}",
+                        idx.last_block
+                    );
+                    self.dao_index = Some(idx);
+                    return Ok(());
+                }
+                Err(e) => println!("DAO index: failed to decode checkpoint: {e:?}"),
+            }
+        } else {
+            println!("DAO index: no checkpoint found; starting fresh.");
+        }
+        Ok(())
+    }
+
+    #[local]
+    fn save_checkpoint(&self) -> Result<(), String> {
+        match rmp_serde::to_vec(self) {
+            Ok(bytes) => {
+                set_state(&bytes);
+                let last = self
+                    .dao_index
+                    .as_ref()
+                    .map(|d| d.last_block)
+                    .unwrap_or(LOCAL_DAO_FIRST_BLOCK);
+                println!("DAO index: saved checkpoint at block {}", last);
+            }
+            Err(e) => {
+                println!("DAO index: failed to serialize checkpoint: {e:?}");
+            }
+        }
+        Ok(())
+    }
+
+    #[local]
+    fn fetch_dao_cacher_last_block(&self) -> Option<u64> {
+        let address = Address::new("our", ("dao-cacher", "hypermap-cacher", "sys"));
+        let response = Request::to(address)
+            .body(DaoCacherRequest::GetStatus)
+            .send_and_await_response(5)
+            .ok()?
+            .ok()?;
+        let Message::Response { body, .. } = response else {
+            return None;
+        };
+        match body.try_into() {
+            Ok(DaoCacherResponse::GetStatus(status)) => Some(status.last_cached_block),
+            _ => None,
+        }
+    }
+
+    #[local]
+    fn bootstrap_dao_index(&mut self) -> Result<(), String> {
+        let start_block = self
+            .dao_index
+            .as_ref()
+            .map(|d| d.last_block)
+            .unwrap_or(LOCAL_DAO_FIRST_BLOCK);
+        let mut last_block = start_block;
+        if let Some(latest) = self.fetch_dao_cacher_last_block() {
+            if latest > last_block {
+                last_block = latest;
+            }
+        }
+        self.dao_index = Some(DaoIndex { last_block });
+        self.save_checkpoint()?;
+        Ok(())
+    }
+
+    #[local]
+    fn refresh_dao_index_from_cacher(&mut self) -> Result<(), String> {
+        let Some(idx) = self.dao_index.clone() else {
+            return Ok(());
+        };
+        let from_block = idx.last_block.saturating_add(1);
+        let address = Address::new("our", ("dao-cacher", "hypermap-cacher", "sys"));
+        let req = DaoGetLogsByRangeRequest {
+            from_block,
+            to_block: None,
+        };
+        match Request::to(address)
+            .body(DaoCacherRequest::GetLogsByRange(req))
+            .send_and_await_response(15)
+        {
+            Ok(Ok(message)) => {
+                let Message::Response { body, .. } = message else {
+                    return Ok(());
+                };
+                match body.try_into() {
+                    Ok(DaoCacherResponse::GetLogsByRange(Ok(
+                        DaoGetLogsByRangeOkResponse::Logs((block, json)),
+                    ))) => {
+                        // Decode caches to log what we received.
+                        #[derive(Deserialize)]
+                        struct MetaStub {
+                            #[serde(rename = "fromBlock")]
+                            from_block: String,
+                            #[serde(rename = "toBlock")]
+                            to_block: String,
+                        }
+                        #[derive(Deserialize)]
+                        struct InnerStub {
+                            topics: Vec<String>,
+                        }
+                        #[derive(Deserialize)]
+                        struct LogStub {
+                            inner: InnerStub,
+                        }
+                        #[derive(Deserialize)]
+                        struct CacheStub {
+                            metadata: MetaStub,
+                            logs: Vec<LogStub>,
+                        }
+
+                        if let Ok(caches) = serde_json::from_str::<Vec<CacheStub>>(&json) {
+                            let sig_created =
+                                format!("{:#066x}", B256::from(HyperwareGovernor::ProposalCreated::SIGNATURE_HASH));
+                            let sig_queued =
+                                format!("{:#066x}", B256::from(HyperwareGovernor::ProposalQueued::SIGNATURE_HASH));
+                            let sig_executed =
+                                format!("{:#066x}", B256::from(HyperwareGovernor::ProposalExecuted::SIGNATURE_HASH));
+                            let sig_canceled = HyperwareGovernor::ProposalCanceled::SIGNATURE_HASH;
+                            let sig_canceled_hex = Some(format!("{:#066x}", B256::from(sig_canceled)));
+                            let sig_vote =
+                                format!("{:#066x}", B256::from(HyperwareGovernor::VoteCast::SIGNATURE_HASH));
+
+                            let mut total_logs = 0usize;
+                            let mut created = 0usize;
+                            let mut queued = 0usize;
+                            let mut executed = 0usize;
+                            let mut canceled = 0usize;
+                            let mut vote_cast = 0usize;
+                            let mut span_from = block;
+                            let mut span_to = block;
+                            for cache in &caches {
+                                if let Ok(fb) = cache.metadata.from_block.parse::<u64>() {
+                                    span_from = span_from.min(fb);
+                                }
+                                if let Ok(tb) = cache.metadata.to_block.parse::<u64>() {
+                                    span_to = span_to.max(tb);
+                                }
+                                for log in &cache.logs {
+                                    total_logs += 1;
+                                    if let Some(topic0) = log.inner.topics.get(0) {
+                                        if topic0.eq_ignore_ascii_case(&sig_created) {
+                                            created += 1;
+                                        } else if topic0.eq_ignore_ascii_case(&sig_queued) {
+                                            queued += 1;
+                                        } else if topic0.eq_ignore_ascii_case(&sig_executed) {
+                                            executed += 1;
+                                        } else if topic0.eq_ignore_ascii_case(&sig_vote) {
+                                            vote_cast += 1;
+                                        } else if let Some(sig) = &sig_canceled_hex {
+                                            if topic0.eq_ignore_ascii_case(sig) {
+                                                canceled += 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            println!(
+                                "dao-cacher delta: {} logs (Created {}, Queued {}, Executed {}, Canceled {}, VoteCast {}) covering blocks {}-{}",
+                                total_logs, created, queued, executed, canceled, vote_cast, span_from, span_to
+                            );
+                        }
+                        if block > idx.last_block {
+                            let mut new_idx = idx.clone();
+                            new_idx.last_block = block;
+                            self.dao_index = Some(new_idx);
+                            self.save_checkpoint()?;
+                        }
+                    }
+                    Ok(DaoCacherResponse::GetLogsByRange(Ok(
+                        DaoGetLogsByRangeOkResponse::Latest(block),
+                    ))) => {
+                        if block > idx.last_block {
+                            let mut new_idx = idx.clone();
+                            new_idx.last_block = block;
+                            self.dao_index = Some(new_idx);
+                            self.save_checkpoint()?;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(_) => {}
+                }
+            }
+            Ok(Err(_)) => {}
+            Err(_) => {}
+        }
+        Ok(())
+    }
+
     #[init]
     async fn initialize(&mut self) {
+        if let Err(e) = self.load_checkpoint() {
+            println!("Failed to load persisted DAO checkpoint: {e}");
+        }
+        let dao_cacher_addr = Address::new("our", ("dao-cacher", "hypermap-cacher", "sys"));
+        println!(
+            "Waiting for dao-cacher at {} to report ready before starting DAO indexing...",
+            dao_cacher_addr
+        );
+        wait_for_process_ready(
+            dao_cacher_addr.clone(),
+            b"\"GetStatus\"".to_vec(),
+            15,
+            2,
+            |body| {
+                let body_str = String::from_utf8_lossy(body);
+                if body_str.contains("IsStarting") || body_str.contains(r#""IsStarting""#) {
+                    WaitClassification::Starting
+                } else if body_str.contains("GetStatus") || body_str.contains("last_cached_block") {
+                    WaitClassification::Ready
+                } else {
+                    WaitClassification::Unknown
+                }
+            },
+            true,
+            None,
+        );
+        println!("dao-cacher ready; bootstrapping DAO index.");
+        if let Err(err) = self.bootstrap_dao_index() {
+            println!("DAO index bootstrap failed: {err}");
+        }
         add_to_homepage("HYPR DAO", Some(ICON), Some("/"), None);
         self.node_id = our().node.clone();
         if let Err(err) = self.refresh_lock_state(None) {
@@ -237,18 +551,9 @@ impl HyprDaoState {
         let parsed = EthAddress::from_str(&address)
             .map_err(|_| "invalid owner address provided".to_string())?;
         self.owner_address = Some(format_address(parsed));
-        println!(
-            "refresh_lock_status_for: starting for {} on chain {}",
-            self.owner_address.as_deref().unwrap_or_default(),
-            LOCAL_CHAIN_ID
-        );
         match self.refresh_lock_state(Some(parsed)) {
             Ok(_) => Ok(self.current_status()),
             Err(err) => {
-                println!(
-                    "refresh_lock_status_for: error on chain {} -> {}",
-                    LOCAL_CHAIN_ID, err
-                );
                 self.last_error = Some(err.clone());
                 Err(err)
             }
@@ -389,7 +694,25 @@ impl HyprDaoState {
     }
 
     #[http]
-    async fn list_proposals(&self) -> Result<Vec<ProposalView>, String> {
+    async fn list_proposals(&mut self) -> Result<Vec<ProposalView>, String> {
+        if let Some(idx) = &self.dao_index {
+            println!(
+                "list_proposals: current DAO checkpoint {}",
+                idx.last_block
+            );
+        }
+        let mut updated_self = self.clone();
+        if let Err(e) = updated_self.refresh_dao_index_from_cacher() {
+            println!("DAO index: refresh from dao-cacher failed: {e}");
+        }
+        if let Some(idx) = &updated_self.dao_index {
+            println!(
+                "DAO index: after refresh checkpoint {}",
+                idx.last_block
+            );
+        }
+        // Sync any updated checkpoint back to self so subsequent calls start from the latest.
+        self.dao_index = updated_self.dao_index.clone();
         let dao = Self::dao_client()?;
         println!(
             "list_proposals: chain {} governor {} from block {}",
@@ -601,10 +924,6 @@ impl HyprDaoState {
         let provider = Provider::new(LOCAL_CHAIN_ID, 30);
         let address = EthAddress::from_str(LOCAL_TOKEN_REGISTRY)
             .map_err(|_| "invalid proxy address".to_string())?;
-        println!(
-            "Using bindings contract at {} on chain {}",
-            LOCAL_TOKEN_REGISTRY, LOCAL_CHAIN_ID
-        );
         Ok(Bindings::new(provider, address))
     }
 
