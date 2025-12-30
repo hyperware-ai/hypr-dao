@@ -290,69 +290,6 @@ impl<'de> Deserialize<'de> for HyprDaoState {
     }
 }
 
-fn seed_dummy_index() -> DaoIndex {
-    let mut proposals = HashMap::new();
-    let fake_id = "12345".to_string();
-    proposals.insert(
-        fake_id.clone(),
-        ProposalIndexEntry {
-            proposal_id: fake_id.clone(),
-            proposer: "0x0000000000000000000000000000000000000001".to_string(),
-            description: "Fake Proposal".to_string(),
-            start_block: 1,
-            end_block: 2,
-            queued_block: Some(3),
-            execute_after: Some(4),
-            executed_block: Some(5),
-            state: Some(1), // Active
-            eta: Some(4),
-            queued_at: Some(100),
-            executed_at: Some(200),
-        },
-    );
-    let mut votes = HashMap::new();
-    votes.insert(
-        fake_id.clone(),
-        vec![
-            VoteView {
-                voter: "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC".to_string(),
-                support: 1,
-                weight: "150".to_string(),
-                reason: "For 1".to_string(),
-            },
-            VoteView {
-                voter: "0x0000000000000000000000000000000000000003".to_string(),
-                support: 1,
-                weight: "150".to_string(),
-                reason: "For 2".to_string(),
-            },
-            VoteView {
-                voter: "0x0000000000000000000000000000000000000004".to_string(),
-                support: 0,
-                weight: "100".to_string(),
-                reason: "Against".to_string(),
-            },
-        ],
-    );
-    let mut quorum = HashMap::new();
-    quorum.insert(
-        fake_id.clone(),
-        QuorumProgress {
-            percent: 75.0,
-            bps: 7500,
-            counted: "300".to_string(),
-            required: "200".to_string(),
-        },
-    );
-    DaoIndex {
-        last_block: 5,
-        proposals_indexed: 1,
-        proposals,
-        votes,
-        quorum,
-    }
-}
-
 #[hyperapp_macro::hyperapp(
     name = "HYPR DAO",
     ui = Some(hyperware_process_lib::http::server::HttpBindingConfig::default()),
@@ -382,15 +319,6 @@ impl HyprDaoState {
             }
         } else {
             println!("DAO index: no checkpoint found; starting fresh.");
-        }
-        // Seed dummy proposal if none exists or proposals are empty (for UI wiring).
-        if self
-            .dao_index
-            .as_ref()
-            .map(|d| d.proposals.is_empty())
-            .unwrap_or(true)
-        {
-            self.dao_index = Some(seed_dummy_index());
         }
         Ok(())
     }
@@ -478,86 +406,33 @@ impl HyprDaoState {
                     Ok(DaoCacherResponse::GetLogsByRange(Ok(
                         DaoGetLogsByRangeOkResponse::Logs((block, json)),
                     ))) => {
-                        // Decode caches to log what we received.
-                        #[derive(Deserialize)]
-                        struct MetaStub {
-                            #[serde(rename = "fromBlock")]
-                            from_block: String,
-                            #[serde(rename = "toBlock")]
-                            to_block: String,
-                        }
-                        #[derive(Deserialize)]
-                        struct CacheStub {
-                            metadata: MetaStub,
-                            logs: Vec<hyperware_process_lib::eth::Log>,
-                        }
-
-                        if let Ok(caches) = serde_json::from_str::<Vec<CacheStub>>(&json) {
-                            let mut total_logs = 0usize;
-                            let mut created = 0usize;
-                            let mut queued = 0usize;
-                            let mut executed = 0usize;
-                            let mut canceled = 0usize;
-                            let mut vote_cast = 0usize;
-                            let mut span_from = block;
-                            let mut span_to = block;
-                            let mut proposal_ids: std::collections::HashSet<String> =
-                                std::collections::HashSet::new();
-                            for cache in &caches {
-                                if let Ok(fb) = cache.metadata.from_block.parse::<u64>() {
-                                    span_from = span_from.min(fb);
-                                }
-                                if let Ok(tb) = cache.metadata.to_block.parse::<u64>() {
-                                    span_to = span_to.max(tb);
-                                }
-                                for log in &cache.logs {
-                                    total_logs += 1;
-                                    let prim = log.inner.clone();
-                                    if let Ok(decoded) =
-                                        HyperwareGovernor::ProposalCreated::decode_log(&prim, true)
-                                    {
-                                        created += 1;
-                                        proposal_ids.insert(decoded.proposalId.to_string());
-                                        continue;
-                                    }
-                                    if let Ok(decoded) =
-                                        HyperwareGovernor::ProposalQueued::decode_log(&prim, true)
-                                    {
-                                        queued += 1;
-                                        proposal_ids.insert(decoded.proposalId.to_string());
-                                        continue;
-                                    }
-                                    if let Ok(decoded) =
-                                        HyperwareGovernor::ProposalExecuted::decode_log(&prim, true)
-                                    {
-                                        executed += 1;
-                                        proposal_ids.insert(decoded.proposalId.to_string());
-                                        continue;
-                                    }
-                                    if let Ok(decoded) =
-                                        HyperwareGovernor::ProposalCanceled::decode_log(&prim, true)
-                                    {
-                                        canceled += 1;
-                                        proposal_ids.insert(decoded.proposalId.to_string());
-                                        continue;
-                                    }
-                                    if let Ok(decoded) =
-                                        HyperwareGovernor::VoteCast::decode_log(&prim, true)
-                                    {
-                                        vote_cast += 1;
-                                        proposal_ids.insert(decoded.proposalId.to_string());
-                                    }
-                                }
+                        let (log_count, span_from, span_to, new_props, new_votes) =
+                            decode_cacher_logs(&json);
+                        println!(
+                            "dao-cacher delta: {} logs covering blocks {}-{} proposals touched: {}",
+                            log_count,
+                            span_from,
+                            span_to,
+                            new_props.len()
+                        );
+                        if let Some(mut current) = self.dao_index.clone() {
+                            let mut touched_ids: Vec<String> = Vec::new();
+                            for (k, v) in new_props {
+                                touched_ids.push(k.clone());
+                                current.proposals.insert(k, v);
                             }
-                            println!(
-                                "dao-cacher delta: {} logs (Created {}, Queued {}, Executed {}, Canceled {}, VoteCast {}) covering blocks {}-{} proposals touched: {:?}",
-                                total_logs, created, queued, executed, canceled, vote_cast, span_from, span_to, proposal_ids
-                            );
-                        }
-                        if block > idx.last_block {
-                            let mut new_idx = idx.clone();
-                            new_idx.last_block = block;
-                            self.dao_index = Some(new_idx);
+                            for (k, vs) in new_votes {
+                                let entry = current.votes.entry(k.clone()).or_default();
+                                entry.extend(vs);
+                                touched_ids.push(k);
+                            }
+                            if block > current.last_block {
+                                current.last_block = block;
+                            }
+                            current.proposals_indexed = current.proposals.len();
+                            self.dao_index = Some(current);
+                            // Hydrate proposals touched by new logs.
+                            let _ = self.hydrate_index_entries(&touched_ids);
                             self.save_checkpoint()?;
                         }
                     }
@@ -789,16 +664,6 @@ impl HyprDaoState {
         // Sync any updated checkpoint back to self so subsequent calls start from the latest.
         self.dao_index = updated_self.dao_index.clone();
         let mut proposals = Vec::new();
-        // If no index or it is empty, seed with dummy data to verify wiring.
-        if self
-            .dao_index
-            .as_ref()
-            .map(|d| d.proposals.is_empty())
-            .unwrap_or(true)
-        {
-            self.dao_index = Some(seed_dummy_index());
-            let _ = self.save_checkpoint();
-        }
         if let Some(idx) = &self.dao_index {
             let mut ids: Vec<_> = idx.proposals.keys().cloned().collect();
             ids.sort_by(|a, b| {
@@ -1101,6 +966,138 @@ fn check_has_voted(
         .map(|ret| ret._0)
         .map_err(|_| "malformed hasVoted response".to_string())
 }
+
+fn decode_cacher_logs(
+    json: &str,
+) -> (
+    usize,
+    u64,
+    u64,
+    HashMap<String, ProposalIndexEntry>,
+    HashMap<String, Vec<VoteView>>,
+) {
+    #[derive(Deserialize)]
+    struct MetaStub {
+        #[serde(rename = "fromBlock")]
+        from_block: String,
+        #[serde(rename = "toBlock")]
+        to_block: String,
+    }
+    #[derive(Deserialize)]
+    struct CacheStub {
+        metadata: MetaStub,
+        logs: Vec<hyperware_process_lib::eth::Log>,
+    }
+
+    let mut proposals: HashMap<String, ProposalIndexEntry> = HashMap::new();
+    let mut votes: HashMap<String, Vec<VoteView>> = HashMap::new();
+    let mut log_count = 0usize;
+    let mut span_from = u64::MAX;
+    let mut span_to = 0u64;
+
+    if let Ok(caches) = serde_json::from_str::<Vec<CacheStub>>(json) {
+        for cache in caches {
+            if let Ok(fb) = cache.metadata.from_block.parse::<u64>() {
+                span_from = span_from.min(fb);
+            }
+            if let Ok(tb) = cache.metadata.to_block.parse::<u64>() {
+                span_to = span_to.max(tb);
+            }
+            for log in cache.logs {
+                log_count += 1;
+                let prim = log.inner.clone();
+                if let Ok(decoded) =
+                    HyperwareGovernor::ProposalCreated::decode_log(&prim, true)
+                {
+                    let id_str = decoded.proposalId.to_string();
+                    let entry = proposals.entry(id_str.clone()).or_default();
+                    entry.proposal_id = id_str;
+                    entry.proposer = format_address(decoded.proposer);
+                    entry.description = decoded.description.clone();
+                    entry.start_block = u256_to_u64(&decoded.startBlock);
+                    entry.end_block = u256_to_u64(&decoded.endBlock);
+                    continue;
+                }
+                if let Ok(decoded) = HyperwareGovernor::ProposalQueued::decode_log(&prim, true) {
+                    let id_str = decoded.proposalId.to_string();
+                    let entry = proposals.entry(id_str.clone()).or_default();
+                    entry.proposal_id = id_str;
+                    entry.queued_block = log.block_number;
+                    entry.execute_after = Some(u256_to_u64(&decoded.eta));
+                    entry.eta = Some(u256_to_u64(&decoded.eta));
+                    continue;
+                }
+                if let Ok(decoded) = HyperwareGovernor::ProposalExecuted::decode_log(&prim, true) {
+                    let id_str = decoded.proposalId.to_string();
+                    let entry = proposals.entry(id_str.clone()).or_default();
+                    entry.proposal_id = id_str;
+                    entry.executed_block = log.block_number;
+                    continue;
+                }
+                if let Ok(decoded) = HyperwareGovernor::ProposalCanceled::decode_log(&prim, true) {
+                    let id_str = decoded.proposalId.to_string();
+                    let entry = proposals.entry(id_str.clone()).or_default();
+                    entry.proposal_id = id_str;
+                    entry.state = Some(2);
+                    continue;
+                }
+                if let Ok(decoded) = HyperwareGovernor::VoteCast::decode_log(&prim, true) {
+                    let id_str = decoded.proposalId.to_string();
+                    proposals.entry(id_str.clone()).or_default().proposal_id = id_str.clone();
+                    votes.entry(id_str.clone()).or_default().push(VoteView {
+                        voter: format_address(decoded.voter),
+                        support: decoded.support,
+                        weight: decoded.weight.to_string(),
+                        reason: decoded.reason.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    (log_count, span_from, span_to, proposals, votes)
+}
+
+impl HyprDaoState {
+    fn hydrate_index_entries(&mut self, ids: &[String]) -> Result<(), String> {
+        let dao = HyprDaoState::dao_client()?;
+        for id in ids {
+            let Ok(parsed_id) = parse_u256(id) else {
+                continue;
+            };
+            if let Some(idx) = &mut self.dao_index {
+                if let Some(entry) = idx.proposals.get_mut(id) {
+                    entry.state = Some(dao.proposal_state(parsed_id).unwrap_or(u8::MAX));
+                    if entry.eta.is_none() {
+                        if let Ok(eta) = dao.proposal_eta(parsed_id) {
+                            entry.eta = Some(u256_to_u64(&eta));
+                            entry.execute_after = entry.eta;
+                        }
+                    }
+                    if entry.execute_after.is_none() {
+                        entry.execute_after = entry.eta;
+                    }
+                    if entry.queued_at.is_none() {
+                        if let Some(qb) = entry.queued_block {
+                            if let Ok(ts) = dao.block_timestamp(qb) {
+                                entry.queued_at = Some(ts);
+                            }
+                        }
+                    }
+                    if entry.executed_at.is_none() {
+                        if let Some(eb) = entry.executed_block {
+                            if let Ok(ts) = dao.block_timestamp(eb) {
+                                entry.executed_at = Some(ts);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 
 impl From<OnchainLockDetails> for LockDetailsView {
     fn from(details: OnchainLockDetails) -> Self {
