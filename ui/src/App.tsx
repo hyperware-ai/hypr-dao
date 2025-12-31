@@ -17,6 +17,7 @@ import { fetchVotes } from './api/votes';
 import { fetchHasVoted } from './api/has_voted';
 import { fetchQuorumProgress } from './api/quorum';
 import { fetchVotingPower } from './api/voting_power';
+import { fetchConfirmedVotes, recordVoteConfirmation } from './api/vote_confirmations';
 import { HyprDao as CallerApp } from '#caller-utils';
 
 const simulationMode =
@@ -546,13 +547,14 @@ function App() {
   const [votesByProposal, setVotesByProposal] = useState<Record<string, VoteView[]>>({});
   const [votesError, setVotesError] = useState<Record<string, string | null>>({});
   const [hasVotedMap, setHasVotedMap] = useState<Record<string, boolean>>({});
+  const [confirmedVoteIds, setConfirmedVoteIds] = useState<Record<string, boolean>>({});
   const [quorumByProposal, setQuorumByProposal] = useState<Record<string, QuorumProgress>>({});
   const [quorumError, setQuorumError] = useState<Record<string, string | null>>({});
   const [votingPowerMap, setVotingPowerMap] = useState<Record<string, VotingPowerAtSnapshot>>({});
   const [votingPowerError, setVotingPowerError] = useState<Record<string, string | null>>({});
   const [voteSubmittingId, setVoteSubmittingId] = useState<string | null>(null);
   const lastVoteProposalIdRef = useRef<string | null>(null);
-  const [voteSubmittedId, setVoteSubmittedId] = useState<string | null>(null);
+  const lastRecordedVoteIdRef = useRef<string | null>(null);
   const [voteError, setVoteError] = useState<string | null>(null);
   const [voteErrorProposalId, setVoteErrorProposalId] = useState<string | null>(null);
 
@@ -653,11 +655,21 @@ function App() {
   const refreshAckTriggerRef = useRef(false);
   const refreshAckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const {
+    data: voteTxHash,
+    error: voteWriteError,
+    isPending: isVotePending,
+    writeContract: writeVoteContract,
+    reset: resetVoteWrite,
+  } = useWriteContract();
+
   useEffect(() => {
     if (!walletConnected) {
-      setVoteSubmittedId(null);
+      setConfirmedVoteIds({});
+      lastRecordedVoteIdRef.current = null;
+      resetVoteWrite();
     }
-  }, [walletConnected]);
+  }, [walletConnected, resetVoteWrite]);
 
   useEffect(() => {
     return () => {
@@ -674,6 +686,27 @@ function App() {
     walletConnected && chain?.id !== undefined && chain.id !== expectedChainId;
   const environmentReady = !networkMismatch;
   const connectComplete = Boolean(walletConnected && environmentReady);
+  useEffect(() => {
+    if (!walletConnected || !address) {
+      setConfirmedVoteIds({});
+      return;
+    }
+    if (activeStepRef.current !== 'vote') {
+      return;
+    }
+    (async () => {
+      try {
+        const confirmed = await fetchConfirmedVotes(address);
+        const next: Record<string, boolean> = {};
+        for (const id of confirmed) {
+          next[id] = true;
+        }
+        setConfirmedVoteIds(next);
+      } catch {
+        setConfirmedVoteIds({});
+      }
+    })();
+  }, [walletConnected, address]);
   const sortedProposals = useMemo(() => {
     if (!proposals) return [];
     const items = [...proposals];
@@ -740,14 +773,20 @@ function App() {
     setIsLoadingProposals(true);
     setProposalError(null);
     try {
-      const result = await fetchProposals();
-      setProposals(result);
-      if (voteSubmittedId) {
-        const match = result.find((p) => p.proposal_id === voteSubmittedId);
-        if (!match || match.state !== 1) {
-          setVoteSubmittedId(null);
+      if (activeStepRef.current === 'vote' && walletConnected && address) {
+        try {
+          const confirmed = await fetchConfirmedVotes(address);
+          const next: Record<string, boolean> = {};
+          for (const id of confirmed) {
+            next[id] = true;
+          }
+          setConfirmedVoteIds(next);
+        } catch {
+          setConfirmedVoteIds({});
         }
       }
+      const result = await fetchProposals();
+      setProposals(result);
       await loadVotesForProposals(result);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to load proposals';
@@ -756,7 +795,7 @@ function App() {
     } finally {
       setIsLoadingProposals(false);
     }
-  }, [loadVotesForProposals, voteSubmittedId]);
+  }, [loadVotesForProposals, walletConnected, address]);
 
   const fetchLockStatusForWallet = useCallback(async () => {
     if (walletConnected && address) {
@@ -960,14 +999,6 @@ function App() {
     if (activeStep !== 'vote') return;
     void loadProposals();
   }, [activeStep, loadProposals]);
-  const {
-    data: voteTxHash,
-    error: voteWriteError,
-    isPending: isVotePending,
-    writeContract: writeVoteContract,
-    reset: resetVoteWrite,
-  } = useWriteContract();
-
   const { isLoading: isVoteConfirming, isSuccess: isVoteConfirmed } = useWaitForTransactionReceipt({
     hash: voteTxHash,
   });
@@ -984,14 +1015,22 @@ function App() {
   useEffect(() => {
     if (isVoteConfirmed) {
       const targetId = voteSubmittingId ?? lastVoteProposalIdRef.current;
-      if (targetId) {
-        setVoteSubmittedId(targetId);
+      if (targetId && address) {
+        if (lastRecordedVoteIdRef.current === targetId) {
+          return;
+        }
+        setConfirmedVoteIds((prev) => {
+          if (prev[targetId]) return prev;
+          return { ...prev, [targetId]: true };
+        });
+        lastRecordedVoteIdRef.current = targetId;
+        void recordVoteConfirmation(targetId, address);
         setVoteSubmittingId(null);
         setHasVotedMap((prev) => ({ ...prev, [targetId]: true }));
         void loadVotesForProposals(proposals);
       }
     }
-  }, [isVoteConfirmed, voteSubmittingId, loadVotesForProposals, proposals]);
+  }, [isVoteConfirmed, voteSubmittingId, loadVotesForProposals, proposals, address]);
 
   const handleVote = useCallback(
     (proposalId: string, support: number) => {
@@ -1001,7 +1040,6 @@ function App() {
       lastVoteProposalIdRef.current = proposalId;
       setVoteError(null);
       setVoteErrorProposalId(null);
-      setVoteSubmittedId(null);
       setVoteSubmittingId(proposalId);
       const reason = nodeId ?? 'unknown node';
       try {
@@ -1384,6 +1422,7 @@ function App() {
                   const votesForProposal = votesByProposal[proposalId] ?? [];
                   const votesErrorForProposal = votesError[proposalId];
                   const hasVoted = hasVotedMap[proposalId];
+                  const hasLocalVote = Boolean(confirmedVoteIds[proposalId]);
                   const quorum = quorumByProposal[proposalId];
                 const quorumErr = quorumError[proposalId];
                 const votingPower = votingPowerMap[proposalId];
@@ -1475,6 +1514,7 @@ function App() {
                   walletConnected &&
                   lockedWei > 0n &&
                   !hasVoted &&
+                  !hasLocalVote &&
                   (votingPower?.has_power ?? true) &&
                   !isVotePending &&
                   !isVoteConfirming;
@@ -1595,7 +1635,7 @@ function App() {
                         You voted on this proposal.
                       </span>
                     )}
-                    {voteSubmittedId === proposalId && proposal.state === 1 && (
+                    {hasLocalVote && proposal.state === 1 && (
                       <span className="lock-card-sub" style={{ display: 'block' }}>
                         Vote submitted successfully.
                       </span>
