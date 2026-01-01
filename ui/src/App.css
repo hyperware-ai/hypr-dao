@@ -67,6 +67,17 @@
   background: rgba(255, 107, 107, 0.2);
   border: 1px solid var(--error-color);
 }
+
+.success-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: rgba(81, 207, 102, 0.2);
+  border: 1px solid var(--success-color);
+}
 .step-info {
   display: flex;
   flex-direction: column;
@@ -105,6 +116,102 @@
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+}
+
+.primary-button {
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: var(--primary-color);
+  color: #fff;
+  padding: 0.75rem 1.75rem;
+  font-weight: 600;
+  align-self: flex-start;
+}
+
+.primary-button:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.claim-card {
+  gap: 1.25rem;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01));
+  border: 1px solid var(--border-color);
+  border-radius: 18px;
+  padding: 1.5rem;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.25);
+}
+
+.claim-prose {
+  font-size: 1rem;
+  margin: 0;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.claim-address,
+.claim-amount {
+  font-weight: 600;
+}
+
+.claim-address {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  font-size: 0.95rem;
+  word-break: break-all;
+}
+
+.claim-warning {
+  margin: 0;
+  color: #f5c542;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  padding: 0.9rem 1rem;
+  border-radius: 12px;
+  border: 1px solid rgba(245, 197, 66, 0.4);
+  background: rgba(245, 197, 66, 0.08);
+}
+
+
+.claim-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem 1rem;
+}
+
+.claim-summary div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.75rem;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.claim-label {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.claim-hash {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+@media (max-width: 560px) {
+  .claim-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .claim-card {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 0;
+  }
 }
 
 .connect-grid {
