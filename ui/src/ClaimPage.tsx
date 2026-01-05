@@ -3,6 +3,7 @@ import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useWaitForTransactionReceipt, useWriteContract } from 'wagmi';
 import { base } from 'wagmi/chains';
 import { isAddress } from 'viem';
+import hyperwareWordmark from './assets/hyperware-wordmark-glow.svg';
 import './App.css';
 
 const MERKLE_DISTRIBUTOR_ADDRESS = '0x000000000081090d75148e17045ff99C9360289f' as const;
@@ -346,6 +347,21 @@ export default function ClaimPage() {
     };
   }, []);
 
+  useEffect(() => {
+    const { body } = document;
+    const prevOverflow = body.style.overflow;
+    const prevMinHeight = body.style.minHeight;
+    const prevHeight = body.style.height;
+    body.style.overflow = 'auto';
+    body.style.minHeight = '100dvh';
+    body.style.height = 'auto';
+    return () => {
+      body.style.overflow = prevOverflow;
+      body.style.minHeight = prevMinHeight;
+      body.style.height = prevHeight;
+    };
+  }, []);
+
   const handleClaim = () => {
     setSubmitError(null);
     resetClaim();
@@ -389,107 +405,126 @@ export default function ClaimPage() {
 
   return (
     <div className="app claim-page">
-      <div className="phone-shell">
-        <div className="phone-frame">
-          <div className="top-banner">
-            <div
-              className={`connect-button-wrapper${showConnectPop ? ' bind-button-pop' : ''}${
-                showConnectShimmer ? ' bind-button-shimmer' : ''
-              }`}
-            >
-              <ConnectButton />
-            </div>
-          </div>
-          <div className="phone-body">
-            <div className="step-card claim-card">
-              <div className="step-info">
-                <div className="step-heading-row">
-                  <h2 className="step-heading">Claim Voting Incentives</h2>
-                </div>
-                <p className="step-description claim-prose">
-                  Address{' '}
-                  <span className="claim-address">{displayAddress}</span>{' '}
-                  is eligible to claim <span className="claim-amount">{displayAmount} HYPR</span>
-                </p>
-              </div>
-              <div className="claim-warning">
-                WARNING: Double-check this link was from a message sent in the official Chat app by dao.hypr and that
-                this app is the HYPR DAO app before proceeding!
-              </div>
-              {claimParams.errors.length > 0 && (
-                <div className="error-banner claim-error">
-                  <span>{claimParams.errors[0]}</span>
-                </div>
-              )}
-              {receiverMismatch && claimParams.receiver && (
-                <div className="error-banner claim-error">
-                  <span>
-                    ERROR: Must connect{' '}
-                    <span className="claim-address">{claimParams.receiver}</span>
-                  </span>
-                </div>
-              )}
-              {submitError && (
-                <div className="error-banner claim-error">
-                  <span>{submitError}</span>
-                </div>
-              )}
-              {claimError && (
-                <div className="error-banner claim-error">
-                  <span>{claimError.message}</span>
-                </div>
-              )}
-              {networkMismatch && (
-                <div className="error-banner claim-error">
-                  <span>Wrong network. Switch to Base to continue.</span>
-                </div>
-              )}
-              {claimConfirmed && (
-                <div className="success-banner claim-success">
-                  <span>Claim confirmed.</span>
-                </div>
-              )}
-              <button
-                type="button"
-                className={`primary-button${showClaimPop ? ' bind-button-pop' : ''}${
-                  showClaimShimmer ? ' bind-button-shimmer' : ''
-                }`}
-                onClick={handleClaim}
-                disabled={
-                  !walletConnected ||
-                  !paramsValid ||
-                  networkMismatch ||
-                  receiverMismatch ||
-                  isClaimPending ||
-                  isConfirming
-                }
-              >
-                {isClaimPending || isConfirming ? 'Claiming...' : 'Claim'}
-              </button>
-              <a
-                className="secondary-button claim-share-button"
-                href={shareReady ? shareIntentUrl : undefined}
-                target={shareReady ? '_blank' : undefined}
-                rel={shareReady ? 'noreferrer' : undefined}
-                aria-disabled={!shareReady}
-                onClick={(event) => {
-                  if (!shareReady) {
-                    event.preventDefault();
-                  }
-                }}
-              >
-                Share on X
-              </a>
-              {claimHash && (
-                <div className="claim-hash">
-                  Tx: <span>{claimHash}</span>
-                </div>
-              )}
-            </div>
-            <div className="body-placeholder" />
-          </div>
-        </div>
+      <div className="claim-background" aria-hidden="true">
+        <div className="claim-glow claim-glow-top" />
+        <div className="claim-glow claim-glow-bottom" />
+        <div className="claim-grid" />
       </div>
+      <header className="claim-nav">
+        <img className="claim-brand" src={hyperwareWordmark} alt="Hyperware" />
+        <div
+          className={`connect-button-wrapper${showConnectPop ? ' bind-button-pop' : ''}${
+            showConnectShimmer ? ' bind-button-shimmer' : ''
+          }`}
+        >
+          <ConnectButton />
+        </div>
+      </header>
+      <main className="claim-main">
+        <div className="claim-orb" aria-hidden="true">
+          <div className="claim-orb-glow" />
+          <div className="claim-orb-core" />
+          <div className="claim-orb-ring" />
+          <span className="claim-orb-dot claim-orb-dot--one" />
+          <span className="claim-orb-dot claim-orb-dot--two" />
+          <span className="claim-orb-dot claim-orb-dot--three" />
+        </div>
+        <section className="claim-header">
+          <div className="claim-badge">
+            <span className="claim-badge-icon" aria-hidden="true" />
+            Incentives Available
+          </div>
+          <h1 className="claim-title">Claim Voting Incentives</h1>
+          <div className="claim-hero">
+            <span className="claim-hero-value">{displayAmount}</span>
+            <span className="claim-hero-unit">HYPR</span>
+          </div>
+        </section>
+        <section className="claim-card">
+          <div className="claim-wallet-row">
+            <span className="claim-wallet-label">WALLET</span>
+            <span className={`claim-wallet-pill${walletConnected && !receiverMismatch ? ' is-ok' : ''}`}>
+              <span className="claim-wallet-dot" />
+              <span className="claim-address">{displayAddress}</span>
+            </span>
+          </div>
+          <div className="claim-warning">
+            WARNING: Double-check this link was from a message sent in the official Chat app by dao.hypr and that this
+            app is the HYPR DAO app before proceeding!
+          </div>
+          {claimParams.errors.length > 0 && (
+            <div className="error-banner claim-error">
+              <span>{claimParams.errors[0]}</span>
+            </div>
+          )}
+          {receiverMismatch && claimParams.receiver && (
+            <div className="error-banner claim-error">
+              <span>
+                ERROR: Must connect <span className="claim-address">{claimParams.receiver}</span>
+              </span>
+            </div>
+          )}
+          {submitError && (
+            <div className="error-banner claim-error">
+              <span>{submitError}</span>
+            </div>
+          )}
+          {claimError && (
+            <div className="error-banner claim-error">
+              <span>{claimError.message}</span>
+            </div>
+          )}
+          {networkMismatch && (
+            <div className="error-banner claim-error">
+              <span>Wrong network. Switch to Base to continue.</span>
+            </div>
+          )}
+          {claimConfirmed && (
+            <div className="success-banner claim-success">
+              <span>Claim confirmed.</span>
+            </div>
+          )}
+          <button
+            type="button"
+            className={`claim-primary-button${showClaimPop ? ' bind-button-pop' : ''}${
+              showClaimShimmer ? ' bind-button-shimmer' : ''
+            }`}
+            onClick={handleClaim}
+            disabled={
+              !walletConnected ||
+              !paramsValid ||
+              networkMismatch ||
+              receiverMismatch ||
+              isClaimPending ||
+              isConfirming
+            }
+          >
+            {isClaimPending || isConfirming ? 'Claiming...' : 'CLAIM INCENTIVES'}
+          </button>
+          <a
+            className="claim-share-button"
+            href={shareReady ? shareIntentUrl : undefined}
+            target={shareReady ? '_blank' : undefined}
+            rel={shareReady ? 'noreferrer' : undefined}
+            aria-disabled={!shareReady}
+            onClick={(event) => {
+              if (!shareReady) {
+                event.preventDefault();
+              }
+            }}
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"></path>
+            </svg>
+            Share on X
+          </a>
+          {claimHash && (
+            <div className="claim-hash">
+              Tx: <span>{claimHash}</span>
+            </div>
+          )}
+        </section>
+      </main>
     </div>
   );
 }
