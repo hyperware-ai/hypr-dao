@@ -159,6 +159,32 @@
   word-break: break-all;
 }
 
+.claim-share-button {
+  align-self: flex-start;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  padding: 0.65rem 1.5rem;
+  background: transparent;
+  color: var(--text-primary);
+  font-weight: 600;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  transition: border-color 0.2s ease, color 0.2s ease;
+}
+
+.claim-share-button:hover {
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+}
+
+.claim-share-button[aria-disabled='true'] {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
 .claim-warning {
   margin: 0;
   color: #f5c542;

@@ -33,6 +33,7 @@ type ClaimParams = {
   amount: bigint | null;
   isClaimable: boolean | null;
   merkleProof: `0x${string}`[] | null;
+  quarter: string;
   errors: string[];
 };
 
@@ -144,6 +145,18 @@ const parseReceiverParam = (value: string | null, errors: string[]) => {
   return trimmed as `0x${string}`;
 };
 
+const parseQuarterParam = (value: string | null, errors: string[]) => {
+  if (value === null || value.trim() === '') {
+    return 'q4-2025';
+  }
+  const trimmed = value.trim().toLowerCase();
+  if (!/^q[1-4]-\d{4}$/.test(trimmed)) {
+    errors.push('Invalid quarter.');
+    return 'q4-2025';
+  }
+  return trimmed;
+};
+
 const parseClaimParams = (search: string): ClaimParams => {
   const params = new URLSearchParams(search);
   const errors: string[] = [];
@@ -154,7 +167,8 @@ const parseClaimParams = (search: string): ClaimParams => {
   const amount = parseBigIntParam(params.get('amount'), 'amount', errors);
   const isClaimable = parseBooleanParam(params.get('isclaimable'), errors);
   const merkleProof = parseMerkleProof(params.get('merkleproof'), errors);
-  return { dIndex, index, kind, receiver, amount, isClaimable, merkleProof, errors };
+  const quarter = parseQuarterParam(params.get('q'), errors);
+  return { dIndex, index, kind, receiver, amount, isClaimable, merkleProof, quarter, errors };
 };
 
 export default function ClaimPage() {
@@ -178,6 +192,13 @@ export default function ClaimPage() {
   const displayAmount = formatHyprAmount(claimParams.amount);
   const receiverMismatch =
     walletConnected && claimParams.receiver !== null && address?.toLowerCase() !== claimParams.receiver.toLowerCase();
+  const shareReady = claimParams.receiver !== null && claimParams.amount !== null;
+  const shareReceiver = claimParams.receiver?.toLowerCase() ?? null;
+  const shareIntentText =
+    shareReceiver && claimParams.amount !== null
+      ? `I locked ${displayAmount} $HYPR and participated in the @Hyperware_ai DAO vote and just claimed my ${displayAmount} $HYPR voting incentives. Don't miss out on votes in Q1 2026 if you want a share of the incentives!\n\nhttps://incentives.hyperware.ai/x/${claimParams.quarter}/${shareReceiver}`
+      : '';
+  const shareIntentUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareIntentText)}`;
   const paramsValid =
     claimParams.errors.length === 0 &&
     claimParams.dIndex !== null &&
@@ -390,6 +411,20 @@ export default function ClaimPage() {
               >
                 {isClaimPending || isConfirming ? 'Claiming...' : 'Claim'}
               </button>
+              <a
+                className="secondary-button claim-share-button"
+                href={shareReady ? shareIntentUrl : undefined}
+                target={shareReady ? '_blank' : undefined}
+                rel={shareReady ? 'noreferrer' : undefined}
+                aria-disabled={!shareReady}
+                onClick={(event) => {
+                  if (!shareReady) {
+                    event.preventDefault();
+                  }
+                }}
+              >
+                Share on X
+              </a>
               {claimHash && (
                 <div className="claim-hash">
                   Tx: <span>{claimHash}</span>
