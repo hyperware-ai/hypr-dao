@@ -37,6 +37,12 @@ type ClaimParams = {
   errors: string[];
 };
 
+type ShareAmounts = {
+  nodeId: string;
+  locked: string;
+  incentive: string;
+};
+
 const formatTerseNumber = (value: string) => {
   const num = parseFloat(value.replace(/,/g, ''));
   if (isNaN(num)) return value;
@@ -192,11 +198,60 @@ export default function ClaimPage() {
   const displayAmount = formatHyprAmount(claimParams.amount);
   const receiverMismatch =
     walletConnected && claimParams.receiver !== null && address?.toLowerCase() !== claimParams.receiver.toLowerCase();
-  const shareReady = claimParams.receiver !== null && claimParams.amount !== null;
   const shareReceiver = claimParams.receiver?.toLowerCase() ?? null;
+  const [shareAmounts, setShareAmounts] = useState<ShareAmounts | null>(null);
+  const [shareAmountsError, setShareAmountsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!shareReceiver) {
+      setShareAmounts(null);
+      setShareAmountsError(null);
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    const loadShareAmounts = async () => {
+      try {
+        setShareAmountsError(null);
+        const response = await fetch(
+          `https://incentives.hyperware.ai/x/amount/${claimParams.quarter}/${shareReceiver}`,
+          { signal: controller.signal }
+        );
+        if (!response.ok) {
+          throw new Error('Share amounts unavailable.');
+        }
+        const data = (await response.json()) as {
+          'node-id'?: string;
+          locked?: string;
+          incentive?: string;
+        };
+        if (!data['node-id'] || !data.locked || !data.incentive) {
+          throw new Error('Share amounts unavailable.');
+        }
+        if (!cancelled) {
+          setShareAmounts({
+            nodeId: data['node-id'],
+            locked: data.locked,
+            incentive: data.incentive,
+          });
+        }
+      } catch (error) {
+        if (cancelled || (error instanceof DOMException && error.name === 'AbortError')) return;
+        setShareAmounts(null);
+        setShareAmountsError('Share amounts unavailable.');
+      }
+    };
+    loadShareAmounts();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [claimParams.quarter, shareReceiver]);
+
+  const shareReady = Boolean(shareAmounts && shareReceiver && !shareAmountsError);
   const shareIntentText =
-    shareReceiver && claimParams.amount !== null
-      ? `I locked ${displayAmount} $HYPR and participated in the @Hyperware_ai DAO vote and just claimed my ${displayAmount} $HYPR voting incentives. Don't miss out on votes in Q1 2026 if you want a share of the incentives!\n\nhttps://incentives.hyperware.ai/x/${claimParams.quarter}/${shareReceiver}`
+    shareAmounts && shareReceiver
+      ? `I locked ${shareAmounts.locked} $HYPR and participated in the @Hyperware_ai DAO vote and just claimed my ${shareAmounts.incentive} $HYPR voting incentives. Don't miss out on votes in Q1 2026 if you want a share of the incentives!\n\nhttps://incentives.hyperware.ai/x/${claimParams.quarter}/${shareReceiver}`
       : '';
   const shareIntentUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareIntentText)}`;
   const paramsValid =
