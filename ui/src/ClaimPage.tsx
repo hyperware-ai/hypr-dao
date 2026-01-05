@@ -412,14 +412,14 @@ export default function ClaimPage() {
       </div>
       <header className="claim-nav">
         <img className="claim-brand" src={hyperwareWordmark} alt="Hyperware" />
-        <div
-          className={`connect-button-wrapper${showConnectPop ? ' bind-button-pop' : ''}${
-            showConnectShimmer ? ' bind-button-shimmer' : ''
-          }`}
-        >
-          <ConnectButton />
-        </div>
       </header>
+      <div
+        className={`claim-connect-floating connect-button-wrapper${showConnectPop ? ' bind-button-pop' : ''}${
+          showConnectShimmer ? ' bind-button-shimmer' : ''
+        }`}
+      >
+        <ConnectButton />
+      </div>
       <main className="claim-main">
         <div className="claim-orb" aria-hidden="true">
           <div className="claim-orb-glow" />
