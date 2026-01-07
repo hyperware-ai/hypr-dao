@@ -2,6 +2,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.tsx';
+import ClaimPage from './ClaimPage.tsx';
 import './index.css';
 import '@rainbow-me/rainbowkit/styles.css';
 
@@ -32,6 +33,9 @@ const wagmiConfig = getDefaultConfig({
 
 const queryClient = new QueryClient();
 
+const renderClaimPage =
+  typeof window !== 'undefined' && window.location.pathname.split('/').pop() === 'claim';
+
 // Create root and render the app
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
@@ -42,7 +46,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           modalSize="compact"
           showRecentTransactions
         >
-          <App />
+          {renderClaimPage ? <ClaimPage /> : <App />}
         </RainbowKitProvider>
       </QueryClientProvider>
     </WagmiProvider>
