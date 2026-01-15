@@ -459,7 +459,13 @@ impl HyprDaoState {
                             }
                             for (k, vs) in new_votes {
                                 let entry = current.votes.entry(k.clone()).or_default();
-                                entry.extend(vs);
+                                for v in vs {
+                                    let voter = v.voter.to_lowercase();
+                                    if entry.iter().any(|e| e.voter.to_lowercase() == voter) {
+                                        continue;
+                                    }
+                                    entry.push(v);
+                                }
                                 touched_ids.push(k);
                             }
                             if block > current.last_block {
@@ -550,7 +556,13 @@ impl HyprDaoState {
             }
             for (k, vs) in new_votes {
                 let entry = current.votes.entry(k.clone()).or_default();
-                entry.extend(vs);
+                for v in vs {
+                    let voter = v.voter.to_lowercase();
+                    if entry.iter().any(|e| e.voter.to_lowercase() == voter) {
+                        continue;
+                    }
+                    entry.push(v);
+                }
                 touched_ids.push(k);
             }
             if latest > current.last_block {
